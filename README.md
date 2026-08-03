@@ -29,6 +29,7 @@
 插件不指定或自动选择 Python 环境；新 Notebook 由用户通过右上角的 Notebook 环境选择器自行选择。
 
 完整验收样例位于 `examples/manim-jupyter-acceptance.manim.ipynb`，覆盖对象静态预览、多行动画、Typst Markdown、普通 Python Cell、自动播放与 PPT 元数据。
+日常上手可直接打开 `examples/demo.manim.ipynb`，里面包含 Typst Markdown、Python 辅助 Cell 和坐标轴、公式、对象移动三类 Manim 动画。
 
 ## Jupyter HTML Slides 交互放映与 PPTX
 
