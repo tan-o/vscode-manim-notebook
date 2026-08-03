@@ -489,7 +489,9 @@ export class CompanionPanel implements vscode.Disposable {
       message: progress || "语句渲染完成，但没有找到视频输出。",
       statement: result.statement,
       cellLabel: cellLabel(cell),
-      ...options,
+      autoplay: true,
+      loop: options.loop,
+      controls: options.controls,
     };
   }
 

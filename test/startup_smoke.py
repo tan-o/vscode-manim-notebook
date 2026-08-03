@@ -18,7 +18,6 @@ exec(compile(startup.read_text(encoding="utf-8"), str(startup), "exec"), namespa
 
 assert namespace["_MANIM_JUPYTER_READY"] is True
 assert namespace["config"].media_embed is False
-assert namespace["_MANIM_JUPYTER_INPUT_TRANSFORM"] is None
 assert None not in shell.input_transformers_cleanup
 
 if "--render" in sys.argv:

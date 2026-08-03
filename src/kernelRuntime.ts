@@ -588,10 +588,7 @@ export class KernelRuntime implements vscode.Disposable {
     const existing = this.workers.get(key);
     if (existing?.specId === spec.id && existing.worker.isAlive) return existing.worker;
     this.releaseWorker(key);
-    const cwd = notebook.uri.scheme === "file"
-      ? path.dirname(notebook.uri.fsPath)
-      : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(this.workerFile.fsPath);
-    const worker = new PythonWorker(spec.executable, this.workerFile.fsPath, cwd);
+    const worker = new PythonWorker(spec.executable, this.workerFile.fsPath, this.notebookCwd(notebook));
     this.workers.set(key, { specId: spec.id, worker });
     return worker;
   }

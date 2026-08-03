@@ -15,7 +15,6 @@ import {
   mathSpanAtOffset,
   notebookManimCellMetadata,
   notebookPythonCellMetadata,
-  prepareCellForRender,
   previewAtLine,
   rawManimCellMetadata,
   rawPythonCellMetadata,
@@ -61,10 +60,6 @@ const settings: ManimNotebookSettings = {
 test("uses one canonical body-only Manim Cell format", () => {
   assert.equal(canonicalManimCellSource("\r\nsquare = Square()\r\n"), "square = Square()");
   assert.equal(isManimCellSource("class Demo(Scene):\n    pass"), false);
-  assert.throws(
-    () => prepareCellForRender("class Demo(Scene):\n    pass", settings),
-    /没有找到/,
-  );
 });
 
 test("uses one canonical metadata schema for *.manim.ipynb", () => {
@@ -90,16 +85,6 @@ test("uses one canonical metadata schema for *.manim.ipynb", () => {
   assert.deepEqual(python.vscode, { languageId: "python" });
   const livePython = notebookPythonCellMetadata(notebook);
   assert.equal(isManimCellMetadata(livePython), false);
-});
-
-test("prepareCellForRender keeps a body-only Cell and creates a hidden stable name", () => {
-  const source = "square = Square()\nself.play(Create(square))";
-  const result = prepareCellForRender(source, settings);
-  assert.equal(result.sceneName, sceneNameForBody(source));
-  assert.match(result.sceneName, /^_ManimCell_[0-9a-f]{12}$/);
-  assert.equal(result.source, source);
-  assert.equal(result.changed, false);
-  assert.doesNotMatch(result.source, /%manim|from manim/);
 });
 
 test("new scene templates contain only user-facing Manim source", () => {

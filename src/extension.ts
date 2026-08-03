@@ -162,9 +162,7 @@ function sceneCellSettings(
     const source = canonicalManimCellSource(cell.document.getText());
     if (isManimCell(cell)) {
       const sceneName = sceneNameForBody(source);
-      // Key by cell identity, not source hash: identical Scene bodies with
-      // different PPT/autoplay settings must not overwrite one another.
-      result[`${sceneName}#${cell.index}`] = getCellSettings(cell);
+      result[sceneName] = getCellSettings(cell);
     }
   }
   return result;
@@ -309,7 +307,8 @@ function activeCell(): vscode.NotebookCell | undefined {
   if (!editor || !isManimNotebook(editor.notebook)) {
     return undefined;
   }
-  return editor.notebook.cellAt(editor.selection.start);
+  const index = Math.min(editor.selection.start, editor.notebook.cellCount - 1);
+  return index >= 0 ? editor.notebook.cellAt(index) : undefined;
 }
 
 async function insertCell(cellArgument?: vscode.NotebookCell): Promise<void> {
@@ -525,10 +524,6 @@ function executionKey(summary: vscode.NotebookCellExecutionSummary | undefined):
     start: summary?.timing?.startTime,
     end: summary?.timing?.endTime,
   });
-}
-
-function latestCell(cell: vscode.NotebookCell): vscode.NotebookCell {
-  return cell.notebook.cellAt(cell.index);
 }
 
 async function executeCell(cell: vscode.NotebookCell): Promise<vscode.NotebookCell> {

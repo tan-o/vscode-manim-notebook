@@ -253,18 +253,6 @@ export function countManimAnimations(source: string): number {
   return source.match(/\bself\.(?:play|wait)\s*\(/g)?.length ?? 0;
 }
 
-export function prepareCellForRender(
-  source: string,
-  _settings: ManimNotebookSettings,
-): { source: string; sceneName: string; changed: boolean } {
-  const cleaned = canonicalManimCellSource(source);
-  if (!isManimCellSource(cleaned)) {
-    throw new Error("当前 Cell 中没有找到 self.play(...)、self.wait(...) 或其他 Manim 场景代码。");
-  }
-  const sceneName = sceneNameForBody(cleaned);
-  return { source: cleaned, sceneName, changed: cleaned !== source };
-}
-
 export function buildMagicArguments(
   sceneName: string,
   settings: ManimNotebookSettings,
@@ -296,28 +284,11 @@ export function buildMagicArguments(
   return parts.join(" ");
 }
 
-export function buildMagicLine(
-  sceneName: string,
-  settings: ManimNotebookSettings,
-): string {
-  return `%manim ${buildMagicArguments(sceneName, settings)}`;
-}
-
 export function buildSceneCell(
   _className: string,
   _settings?: ManimNotebookSettings,
 ): string {
   return `title = TypstMath(r"sum_(k=1)^n k = (n(n + 1)) / 2", color=MANIM_FOREGROUND)
-self.play(Write(title))
-self.next_slide()
-self.play(title.animate.to_edge(UP))`;
-}
-
-export function buildSlideCell(
-  _className: string,
-  _settings?: ManimNotebookSettings,
-): string {
-  return `title = Typst("#text(size: 36pt, weight: \\"bold\\")[Manim Slides]", color=MANIM_FOREGROUND)
 self.play(Write(title))
 self.next_slide()
 self.play(title.animate.to_edge(UP))`;
@@ -479,21 +450,6 @@ export function animationAtLine(
     line = end;
   }
   return undefined;
-}
-
-export function adaptSceneSourceToSlides(source: string): {
-  source: string;
-  sceneName: string;
-  changed: boolean;
-} {
-  // Runtime aliases Scene -> Slide and ThreeDScene -> ThreeDSlide. Keeping the
-  // visible base class unchanged is what lets cells stay pure Manim source.
-  const cleaned = canonicalManimCellSource(source);
-  if (!isManimCellSource(cleaned)) {
-    throw new Error("当前 Cell 中没有找到 Manim 动画代码。");
-  }
-  const sceneName = sceneNameForBody(cleaned);
-  return { source: cleaned, sceneName, changed: cleaned !== source };
 }
 
 /**

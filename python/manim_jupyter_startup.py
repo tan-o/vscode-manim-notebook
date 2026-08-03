@@ -85,11 +85,8 @@ class _ManimJupyterBoundedVideo(_ManimJupyterOriginalVideo):
 
 _manim_jupyter_ipython_magic.Video = _ManimJupyterBoundedVideo
 
-# Preserve the original Manim bases across repeated bootstrap executions.
-_ManimJupyterManimScene = globals().get("_ManimJupyterManimScene", Scene)
-_ManimJupyterManimThreeDScene = globals().get(
-    "_ManimJupyterManimThreeDScene", ThreeDScene
-)
+_ManimJupyterManimScene = Scene
+_ManimJupyterManimThreeDScene = ThreeDScene
 Scene = _ManimJupyterSlide
 ThreeDScene = _ManimJupyterThreeDSlide
 Slide = _ManimJupyterSlide
@@ -98,12 +95,6 @@ ThreeDSlide = _ManimJupyterThreeDSlide
 
 _manim_jupyter_ip = get_ipython()
 _manim_jupyter_ip.register_magics(_manim_jupyter_ipython_magic.ManimMagic)
-# Remove the source-sniffing transformer if this kernel was bootstrapped by an
-# older development build. Python execution must never be inferred from text.
-_manim_jupyter_old_transform = globals().get("_MANIM_JUPYTER_INPUT_TRANSFORM")
-if _manim_jupyter_old_transform in _manim_jupyter_ip.input_transformers_cleanup:
-    _manim_jupyter_ip.input_transformers_cleanup.remove(_manim_jupyter_old_transform)
-_MANIM_JUPYTER_INPUT_TRANSFORM = None
 
 
 def _ManimJupyterAutoPlayMedia(media, loop=False):
