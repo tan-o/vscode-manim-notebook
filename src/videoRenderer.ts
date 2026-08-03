@@ -77,6 +77,15 @@ export class ManimVideoRendererService implements vscode.Disposable {
     return resolved;
   }
 
+  setVideoLoop(enabled: boolean): void {
+    void this.messaging.postMessage({ type: "setLoop", enabled: Boolean(enabled) });
+  }
+
+  private videoLoop(): boolean {
+    return vscode.workspace.getConfiguration("manimJupyter")
+      .get<boolean>("videoLoop", false);
+  }
+
   private async stream(
     editor: vscode.NotebookEditor,
     id: string,
@@ -96,7 +105,7 @@ export class ManimVideoRendererService implements vscode.Disposable {
     }
     if (this.cancelled.delete(id)) return;
     const started = await this.messaging.postMessage(
-      { type: "videoStart", id, size: info.size },
+      { type: "videoStart", id, size: info.size, loop: this.videoLoop() },
       editor,
     );
     if (!started) return;

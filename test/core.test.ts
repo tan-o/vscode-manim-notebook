@@ -55,6 +55,7 @@ const settings: ManimNotebookSettings = {
   pixelWidth: 1280,
   aspectRatio: "16:9",
   frameRate: 30,
+  videoLoop: false,
 };
 
 test("uses one canonical body-only Manim Cell format", () => {

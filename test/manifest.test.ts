@@ -23,6 +23,9 @@ interface ExtensionManifest {
     }>;
     notebookRenderer: RendererContribution[];
     menus: Record<string, Array<{ command: string; when?: string; group?: string }>>;
+    configuration: {
+      properties: Record<string, { default?: unknown; type?: string; description?: string }>;
+    };
   };
 }
 
@@ -101,6 +104,52 @@ test("video renderer uses portable bounded chunks instead of typed-array messagi
   assert.match(renderer, /base64Bytes\(message\.chunkBase64\)/);
   assert.doesNotMatch(host, /chunk:\s*bytes\.buffer/);
   assert.match(host, /MAX_VIDEO_BYTES\s*=\s*128\s*\*\s*1024\s*\*\s*1024/);
+  assert.match(renderer, /video\.autoplay = true/);
+  assert.match(renderer, /video\.setAttribute\("muted", ""\)/);
+  assert.doesNotMatch(renderer, /Boolean\(payload\.autoplay\)/);
+  assert.match(renderer, /attemptPlayback\(state\)/);
+});
+
+test("quick actions expose configurable video loop separate from PPT loop", async () => {
+  const value = await manifest();
+  const extension = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "extension.ts"),
+    "utf8",
+  );
+  const navigation = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "navigationViews.ts"),
+    "utf8",
+  );
+  const renderer = await readFile(
+    path.resolve(__dirname, "..", "..", "renderer", "manimVideo.js"),
+    "utf8",
+  );
+  const host = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "videoRenderer.ts"),
+    "utf8",
+  );
+  const runtime = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "kernelRuntime.ts"),
+    "utf8",
+  );
+  const startup = await readFile(
+    path.resolve(__dirname, "..", "..", "python", "manim_jupyter_startup.py"),
+    "utf8",
+  );
+  const config = value.contributes.configuration.properties["manimJupyter.videoLoop"];
+  assert.equal(config?.default, false);
+  assert.ok(value.contributes.commands.some(
+    (command) => command.command === "manimJupyter.toggleVideoLoop",
+  ));
+  assert.match(navigation, /视频循环播放/);
+  assert.match(navigation, /get<boolean>\("videoLoop", false\)/);
+  assert.match(extension, /registerCommand\("manimJupyter\.toggleVideoLoop"/);
+  assert.match(extension, /videoRenderer\.setVideoLoop\(!current\)/);
+  assert.match(runtime, /_MANIM_JUPYTER_BOOTSTRAP\["videoLoop"\]/);
+  assert.match(startup, /get\("videoLoop", False\)/);
+  assert.match(renderer, /message\?\.type === "setLoop"/);
+  assert.match(host, /type: "videoStart", id, size: info\.size, loop: this\.videoLoop\(\)/);
+  assert.match(renderer, /message\.loop === undefined/);
 });
 
 test("Typst exclusively owns dollar math in Manim Markdown", async () => {
@@ -392,6 +441,8 @@ test("companion preview refreshes local resource roots when notebooks change", a
   assert.match(source, /updateLocalResourceRoots\(cell\?\.notebook\)/);
   assert.match(source, /localResourceRoots:\s*this\.localResourceRoots\(notebook\)/);
   assert.match(source, /path\.dirname\(notebook\.uri\.fsPath\)/);
+  assert.match(source, /video\.muted=true;video\.defaultMuted=true/);
+  assert.doesNotMatch(source, /empty\.style\.display='block';title\.textContent='点击视频播放'/);
 });
 
 test("documentation errors expose their cause and recovery actions", async () => {

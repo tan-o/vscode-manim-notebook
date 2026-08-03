@@ -1013,7 +1013,8 @@ config.media_width = ${JSON.stringify(settings.mediaWidth)}
 config.media_embed = False
 config.progress_bar = "display"
 config.background_color = ${JSON.stringify(settings.backgroundColor)}
-config.frame_width = config.frame_height * ${this.aspect(settings.aspectRatio)}`;
+config.frame_width = config.frame_height * ${this.aspect(settings.aspectRatio)}
+_MANIM_JUPYTER_BOOTSTRAP["videoLoop"] = ${JSON.stringify(settings.videoLoop)}`;
     const outputs = await this.executeCode(notebook, code);
     const error = outputs.flatMap((output) => output.items)
       .find((output) => output.mime === "application/vnd.code.notebook.error");
@@ -1331,6 +1332,7 @@ globals().pop(${JSON.stringify(previewName)}, None)`;
       mediaWidth: settings.mediaWidth,
       backgroundColor: settings.backgroundColor,
       aspect: this.aspect(settings.aspectRatio),
+      videoLoop: settings.videoLoop,
     });
     const file = this.startupFile.fsPath;
     return `# <manim-jupyter-wrapped>

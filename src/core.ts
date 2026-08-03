@@ -12,6 +12,7 @@ export interface ManimNotebookSettings {
   pixelWidth: number;
   aspectRatio: "16:9" | "4:3" | "1:1" | "9:16";
   frameRate: number;
+  videoLoop: boolean;
 }
 
 export interface ManimCellSettings {

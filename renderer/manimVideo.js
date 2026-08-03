@@ -38,7 +38,7 @@ function isSupportedVideoHeader(chunks, mimeType) {
   return String.fromCharCode(first[4], first[5], first[6], first[7]) === "ftyp";
 }
 
-function fail(state, message) {
+function fail(state, message, activeStates) {
   state.chunks = [];
   state.video.pause();
   state.video.removeAttribute("src");
@@ -54,16 +54,52 @@ function fail(state, message) {
     objectUrls.delete(state.outputId);
   }
   pending.delete(state.requestId);
+  activeStates?.delete(state.outputId);
+}
+
+function attemptPlayback(state) {
+  if (state.playbackAttempted) return;
+  if (!state.video.paused) {
+    state.status.remove();
+    return;
+  }
+  state.playbackAttempted = true;
+  const play = state.video.play();
+  if (!play) {
+    state.status.remove();
+    return;
+  }
+  play
+    .then(() => state.status.remove())
+    .catch(() => {
+      if (state.video.paused) {
+        state.status.textContent = "VS Code 拦截了自动播放，请点击视频播放。";
+        state.status.className = "manim-video-hint";
+        state.status.style.color = "var(--vscode-descriptionForeground)";
+        state.status.style.whiteSpace = "normal";
+        if (!state.status.isConnected) state.element.appendChild(state.status);
+      } else {
+        state.status.remove();
+      }
+    });
 }
 
 export function activate(context) {
+  const activeStates = new Map();
   context.onDidReceiveMessage?.((message) => {
+    if (message?.type === "setLoop") {
+      for (const state of activeStates.values()) {
+        state.video.loop = Boolean(message.enabled);
+      }
+      return;
+    }
     const state = message?.id ? pending.get(message.id) : undefined;
     if (!state) return;
     if (message.type === "videoStart") {
       state.chunks = [];
       state.received = 0;
       state.size = Number(message.size) || 0;
+      state.video.loop = message.loop === undefined ? Boolean(state.payload.loop) : Boolean(message.loop);
       state.status.textContent = "正在载入 Manim 视频…";
       return;
     }
@@ -72,11 +108,11 @@ export function activate(context) {
       // only for VS Code builds that really do preserve typed arrays.
       const chunk = base64Bytes(message.chunkBase64) || bytes(message.chunk);
       if (!chunk || chunk.byteLength === 0) {
-        fail(state, "视频传输失败：VS Code Renderer 没有收到有效二进制数据。请重新运行当前 Cell。");
+        fail(state, "视频传输失败：VS Code Renderer 没有收到有效二进制数据。请重新运行当前 Cell。", activeStates);
         return;
       }
       if (state.received + chunk.byteLength > state.size) {
-        fail(state, "视频传输失败：收到的数据超过 Manim 视频文件大小。");
+        fail(state, "视频传输失败：收到的数据超过 Manim 视频文件大小。", activeStates);
         return;
       }
       state.chunks.push(chunk);
@@ -88,11 +124,11 @@ export function activate(context) {
     }
     if (message.type === "videoEnd") {
       if (state.received !== state.size || Number(message.received) !== state.size) {
-        fail(state, `视频传输不完整：应为 ${state.size} 字节，实际收到 ${state.received} 字节。`);
+        fail(state, `视频传输不完整：应为 ${state.size} 字节，实际收到 ${state.received} 字节。`, activeStates);
         return;
       }
       if (!isSupportedVideoHeader(state.chunks, state.payload.mimeType || "video/mp4")) {
-        fail(state, "Manim 输出不是有效的 MP4/WebM 文件，已停止加载。");
+        fail(state, "Manim 输出不是有效的 MP4/WebM 文件，已停止加载。", activeStates);
         return;
       }
       const blob = new Blob(state.chunks, { type: state.payload.mimeType || "video/mp4" });
@@ -104,30 +140,35 @@ export function activate(context) {
       state.video.src = url;
       state.status.textContent = "正在读取视频元数据…";
       const timeout = setTimeout(() => {
-        if (pending.has(message.id)) fail(state, "视频文件已载入，但 VS Code 未能读取其时长或编码信息。");
+        if (pending.has(message.id)) fail(state, "视频文件已载入，但 VS Code 未能读取其时长或编码信息。", activeStates);
       }, 15000);
       state.video.addEventListener("loadedmetadata", () => {
         clearTimeout(timeout);
         if (!Number.isFinite(state.video.duration) || state.video.duration <= 0) {
-          fail(state, "视频文件没有有效时长。请检查 FFmpeg 编码器输出。");
+          fail(state, "视频文件没有有效时长。请检查 FFmpeg 编码器输出。", activeStates);
           return;
         }
         state.video.playbackRate = Number(state.payload.playbackRate) || 1;
         state.video.style.display = "block";
-        state.status.remove();
         pending.delete(message.id);
-        void state.video.play().catch(() => undefined);
+        attemptPlayback(state);
+      }, { once: true });
+      state.video.addEventListener("canplay", () => {
+        if (state.video.readyState >= 1) attemptPlayback(state);
+      }, { once: true });
+      state.video.addEventListener("canplaythrough", () => {
+        if (state.video.readyState >= 3) attemptPlayback(state);
       }, { once: true });
       state.video.addEventListener("error", () => {
         clearTimeout(timeout);
         const code = state.video.error?.code;
-        fail(state, `VS Code 无法解码 Manim 视频${code ? `（媒体错误 ${code}）` : ""}。`);
+        fail(state, `VS Code 无法解码 Manim 视频${code ? `（媒体错误 ${code}）` : ""}。`, activeStates);
       }, { once: true });
       state.video.load();
       return;
     }
     if (message.type === "videoError") {
-      fail(state, message.message || "Manim 视频载入失败。");
+      fail(state, message.message || "Manim 视频载入失败。", activeStates);
     }
   });
 
@@ -186,10 +227,13 @@ export function activate(context) {
         chunks: [],
         received: 0,
         size: 0,
+        playbackAttempted: false,
       });
+      activeStates.set(outputItem.id, pending.get(id));
       context.postMessage?.({ type: "loadVideo", id, path: payload.path });
     },
     disposeOutputItem(id) {
+      activeStates.delete(id);
       for (const [requestId, state] of pending) {
         if (state.outputId === id) {
           context.postMessage?.({ type: "cancelVideo", id: requestId });

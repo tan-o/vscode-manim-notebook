@@ -2,7 +2,7 @@
   "name": "manim-ce-jupyter",
   "displayName": "Manim CE for Jupyter",
   "description": "A standalone *.manim.ipynb studio with a real IPykernel, Manim, Typst, Jupyter-style HTML slides and PPTX export.",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "publisher": "feysen",
   "license": "MIT",
   "engines": {
@@ -122,6 +122,12 @@
         "title": "Open Preview and Contextual Help",
         "category": "Manim Jupyter",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "manimJupyter.toggleVideoLoop",
+        "title": "切换视频循环播放",
+        "category": "Manim Jupyter",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "manimJupyter.insertTypstPreset",
@@ -297,6 +303,11 @@
           "maximum": 120,
           "default": 30,
           "description": "Output video frame rate."
+        },
+        "manimJupyter.videoLoop": {
+          "type": "boolean",
+          "default": false,
+          "description": "Cell 输出和右侧预览的视频循环播放；不影响 PPT/HTML Slides 的页面循环。"
         }
       }
     },

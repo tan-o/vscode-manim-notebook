@@ -73,7 +73,7 @@ class _ManimJupyterBoundedVideo(_ManimJupyterOriginalVideo):
                     # per-cell autoplay setting is only consumed by Manim
                     # Slides (auto_next) in kernelRuntime.ts.
                     "autoplay": True,
-                    "loop": bool(options.get("loop", False)),
+                    "loop": bool(_manim_jupyter_options.get("videoLoop", False)),
                     "controls": bool(options.get("controls", True)),
                     "playbackRate": float(options.get("playbackRate", 1.0)),
                     "width": str(config.media_width or "100%"),

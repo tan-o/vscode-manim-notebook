@@ -12,6 +12,7 @@ namespace["get_ipython"] = lambda: shell
 namespace["_MANIM_JUPYTER_BOOTSTRAP"] = {
     "theme": "dark",
     "cellSettings": {},
+    "videoLoop": True,
 }
 startup = Path(__file__).parents[1] / "python" / "manim_jupyter_startup.py"
 exec(compile(startup.read_text(encoding="utf-8"), str(startup), "exec"), namespace)
@@ -49,6 +50,7 @@ if "--render" in sys.argv:
     ]
     assert videos
     assert Path(videos[-1]["path"]).is_file()
+    assert videos[-1]["loop"] is True
     assert all("data:video/" not in output.get("text/html", "") for output in published)
     published.clear()
     preview = shell.run_cell(
@@ -73,6 +75,7 @@ if "--render" in sys.argv:
     ]
     assert videos
     assert Path(videos[-1]["path"]).is_file()
+    assert videos[-1]["loop"] is True
     assert all("data:video/" not in output.get("text/html", "") for output in published)
     shell.display_pub.publish = original_publish
 print("strict startup and explicit Manim render smoke test passed")

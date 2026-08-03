@@ -117,6 +117,7 @@ function settings(): ManimNotebookSettings {
     pixelWidth: config.get<number>("pixelWidth", 1280),
     aspectRatio: config.get<ManimNotebookSettings["aspectRatio"]>("aspectRatio", "16:9"),
     frameRate: config.get<number>("frameRate", 30),
+    videoLoop: config.get<boolean>("videoLoop", false),
   };
 }
 
@@ -701,7 +702,7 @@ async function configureCell(cellArgument?: vscode.NotebookCell): Promise<void> 
   const choices: Array<vscode.QuickPickItem & { key: ToggleKey }> = [
     { key: "ppt", label: "$(presentation) 此 Cell 开启新页", description: "在同一 Scene 中插入 next_slide()，不清空对象", picked: current.ppt },
     { key: "autoplay", label: "$(play-circle) HTML Slides 自动继续", description: "Cell 输出和预览始终自动播放；此选项只控制 HTML Slides 是否自动切到下一页", picked: current.autoplay },
-    { key: "loop", label: "$(debug-restart) 循环播放", description: "本页 PPT 和右侧视频循环", picked: current.loop },
+    { key: "loop", label: "$(debug-restart) PPT 循环播放", description: "HTML Slides 页面循环；视频循环请在快捷操作中切换", picked: current.loop },
     { key: "controls", label: "$(settings) 显示视频控件", description: "右侧语句预览显示控制条", picked: current.controls },
     { key: "linePreview", label: "$(open-preview) 对象与动画预览", description: "光标移动后自动低清渲染对象、位置或动画", picked: current.linePreview },
   ];
@@ -946,8 +947,9 @@ export function activate(context: vscode.ExtensionContext): void {
     (notebook) => kernelRuntime?.resolveTypstExecutable(notebook),
   );
   const videoRenderer = new ManimVideoRendererService();
+  const operationsProvider = new OperationsTreeProvider();
   const operationsView = vscode.window.createTreeView("manimJupyter.operations", {
-    treeDataProvider: new OperationsTreeProvider(),
+    treeDataProvider: operationsProvider,
     showCollapseAll: false,
   });
   const cellSyncTimers = new Map<string, NodeJS.Timeout>();
@@ -1012,6 +1014,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("manimJupyter.checkKernel", checkKernel),
     vscode.commands.registerCommand("manimJupyter.insertTypstPreset", insertTypstPreset),
     vscode.commands.registerCommand("manimJupyter.openCompanion", () => companionPanel?.show()),
+    vscode.commands.registerCommand("manimJupyter.toggleVideoLoop", async () => {
+      const current = settings().videoLoop;
+      const target = vscode.workspace.workspaceFile || vscode.workspace.workspaceFolders?.length
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+      await vscode.workspace.getConfiguration("manimJupyter")
+        .update("videoLoop", !current, target);
+      operationsProvider.refresh();
+      companionPanel?.refresh(true);
+      videoRenderer.setVideoLoop(!current);
+      await syncActiveNotebookSceneCells();
+    }),
     vscode.commands.registerCommand("manimJupyter.openDocs", async () => {
       const query = await vscode.window.showInputBox({ title: "搜索 Manim 文档", placeHolder: "Transform、Axes、TypstMath" });
       if (query !== undefined) {
@@ -1043,6 +1057,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("manimJupyter") && !settingsView.isWriting) {
         settingsView.refresh();
+        operationsProvider.refresh();
+        companionPanel?.refresh(true);
         void syncActiveNotebookSceneCells();
       }
     }),

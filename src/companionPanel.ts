@@ -322,6 +322,11 @@ export class CompanionPanel implements vscode.Disposable {
     );
   }
 
+  private videoLoop(): boolean {
+    return vscode.workspace.getConfiguration("manimJupyter")
+      .get<boolean>("videoLoop", false);
+  }
+
   private async refreshPreview(generation: number): Promise<void> {
     if (this.previewRunning) {
       this.previewQueued = true;
@@ -355,7 +360,7 @@ export class CompanionPanel implements vscode.Disposable {
           message: "正在低清渲染光标所在的对象或动画……",
           cellLabel: cellLabel(cell),
           autoplay: true,
-          loop: options.loop,
+          loop: this.videoLoop(),
           controls: options.controls,
         });
       }
@@ -378,7 +383,7 @@ export class CompanionPanel implements vscode.Disposable {
         message: message.slice(-1800),
         cellLabel: cellLabel(cell),
         autoplay: true,
-        loop: options.loop,
+        loop: this.videoLoop(),
         controls: options.controls,
       });
     } finally {
@@ -397,7 +402,7 @@ export class CompanionPanel implements vscode.Disposable {
       message,
       cellLabel: cellLabel(cell),
       autoplay: true,
-      loop: options.loop,
+      loop: this.videoLoop(),
       controls: options.controls,
     };
   }
@@ -428,7 +433,7 @@ export class CompanionPanel implements vscode.Disposable {
                 statement: result.statement,
                 cellLabel: cellLabel(cell),
                 autoplay: true,
-                loop: options.loop,
+                loop: this.videoLoop(),
                 controls: options.controls,
               };
             }
@@ -444,7 +449,7 @@ export class CompanionPanel implements vscode.Disposable {
             statement: result.statement,
             cellLabel: cellLabel(cell),
             autoplay: true,
-            loop: options.loop,
+            loop: this.videoLoop(),
             controls: options.controls,
           };
         }
@@ -456,7 +461,7 @@ export class CompanionPanel implements vscode.Disposable {
             statement: result.statement,
             cellLabel: cellLabel(cell),
             autoplay: true,
-            loop: options.loop,
+            loop: this.videoLoop(),
             controls: options.controls,
           };
         }
@@ -469,7 +474,7 @@ export class CompanionPanel implements vscode.Disposable {
               statement: result.statement,
               cellLabel: cellLabel(cell),
               autoplay: true,
-              loop: options.loop,
+              loop: this.videoLoop(),
               controls: options.controls,
             };
           }
@@ -480,7 +485,7 @@ export class CompanionPanel implements vscode.Disposable {
             message: concisePythonError(item.data),
             cellLabel: cellLabel(cell),
             autoplay: true,
-            loop: options.loop,
+            loop: this.videoLoop(),
             controls: options.controls,
           };
         }
@@ -495,7 +500,7 @@ export class CompanionPanel implements vscode.Disposable {
       statement: result.statement,
       cellLabel: cellLabel(cell),
       autoplay: true,
-      loop: options.loop,
+      loop: this.videoLoop(),
       controls: options.controls,
     };
   }
@@ -946,20 +951,29 @@ export class CompanionPanel implements vscode.Disposable {
     const vscode=acquireVsCodeApi(),video=document.getElementById('video'),image=document.getElementById('image'),empty=document.getElementById('empty'),spinner=document.getElementById('spinner'),helpPanelTitle=document.getElementById('helpPanelTitle'),docsStatus=document.getElementById('docsStatus'),docsSpinner=document.getElementById('docsSpinner'),docsStatusText=document.getElementById('docsStatusText'),docsContent=document.getElementById('docsContent');
     function showPreview(p){
       const title=document.getElementById('previewTitle'),message=document.getElementById('previewMessage');
+      let autoplayStarted=false;
+      function startAutoplay(){
+        if(!p.autoplay||autoplayStarted||video.paused)return;
+        autoplayStarted=true;
+        const play=video.play();
+        if(play)play.catch(()=>{autoplayStarted=false;});
+      }
       document.getElementById('cellLabel').textContent=p.cellLabel;
       document.getElementById('statement').textContent=p.statement||'';
-      video.pause();video.oncanplay=null;video.onloadedmetadata=null;video.onerror=null;video.removeAttribute('src');
+      video.pause();video.oncanplay=null;video.oncanplaythrough=null;video.onloadedmetadata=null;video.onerror=null;video.removeAttribute('src');
       image.removeAttribute('src');video.style.display='none';image.style.display='none';empty.style.display='block';
       spinner.style.display=p.kind==='rendering'?'block':'none';
       title.textContent=p.kind==='error'?'预览失败':p.kind==='rendering'?'正在渲染':p.kind==='video'||p.kind==='image'?'对象/动画预览':'等待对象或动画';
-      message.textContent=p.message;video.loop=!!p.loop;video.controls=!!p.controls;video.autoplay=!!p.autoplay;video.muted=!!p.autoplay;video.defaultMuted=!!p.autoplay;
+      message.textContent=p.message;video.loop=!!p.loop;video.controls=!!p.controls;video.autoplay=!!p.autoplay;video.muted=true;video.defaultMuted=true;video.setAttribute('muted','');
       if(p.kind==='video'&&p.source){
         spinner.style.display='block';title.textContent='正在读取视频';video.src=p.source;
         video.onloadedmetadata=()=>{
           if(!Number.isFinite(video.duration)||video.duration<=0){spinner.style.display='none';title.textContent='预览失败';message.textContent='Manim 视频没有有效时长。';return;}
           spinner.style.display='none';empty.style.display='none';video.style.display='block';
-          if(p.autoplay)video.play().catch(()=>{empty.style.display='block';title.textContent='点击视频播放';message.textContent=p.message;});
+          startAutoplay();
         };
+        video.oncanplay=()=>{if(video.readyState>=1)startAutoplay();};
+        video.oncanplaythrough=()=>{if(video.readyState>=3)startAutoplay();};
         video.onerror=()=>{spinner.style.display='none';title.textContent='预览失败';message.textContent='VS Code 无法读取 Manim 视频，请重新渲染当前语句。';};
         video.load();
       }else if(p.kind==='image'&&p.source){empty.style.display='none';image.src=p.source;image.style.display='block';}
