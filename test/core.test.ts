@@ -66,9 +66,13 @@ test("uses one canonical body-only Manim Cell format", () => {
 test("uses one canonical metadata schema for *.manim.ipynb", () => {
   assert.equal(DEFAULT_CELL_SETTINGS.autoplay, false);
   const raw = rawManimCellMetadata(DEFAULT_CELL_SETTINGS);
-  assert.equal(raw.manimJupyterCellType, "manim");
-  assert.deepEqual(raw.slideshow, { slide_type: "slide" });
-  assert.equal((raw.manimJupyter as { autoplay?: unknown }).autoplay, false);
+  assert.deepEqual(raw.manimJupyter, {});
+  assert.equal("manimJupyterCellType" in raw, false);
+  assert.equal("slideshow" in raw, false);
+  assert.deepEqual(
+    rawManimCellMetadata({ ...DEFAULT_CELL_SETTINGS, loop: true, playbackRate: 1.5 }).manimJupyter,
+    { loop: true, playbackRate: 1.5 },
+  );
 
   const notebook = notebookManimCellMetadata(
     { execution_count: null, custom: { metadata: { obsolete: true } } },
@@ -83,7 +87,8 @@ test("uses one canonical metadata schema for *.manim.ipynb", () => {
   const python = rawPythonCellMetadata(raw);
   assert.equal(python.manimJupyterCellType, "python");
   assert.equal("manimJupyter" in python, false);
-  assert.deepEqual(python.vscode, { languageId: "python" });
+  assert.equal("vscode" in python, false);
+  assert.equal("slideshow" in python, false);
   const livePython = notebookPythonCellMetadata(notebook);
   assert.equal(isManimCellMetadata(livePython), false);
 });

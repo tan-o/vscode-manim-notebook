@@ -35,7 +35,13 @@ export const DEFAULT_CELL_SETTINGS: ManimCellSettings = {
 
 function cloneRecord(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? JSON.parse(JSON.stringify(value)) as Record<string, any>
+    ? { ...value } as Record<string, any>
+    : {};
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
     : {};
 }
 
@@ -48,11 +54,22 @@ function rawSettings(value: unknown): Partial<ManimCellSettings> {
 export function rawManimCellMetadata(
   options: ManimCellSettings,
 ): Record<string, unknown> {
+  const manimJupyter: Record<string, unknown> = {};
+  const keys: Array<keyof ManimCellSettings> = [
+    "ppt",
+    "autoplay",
+    "loop",
+    "controls",
+    "linePreview",
+    "playbackRate",
+  ];
+  for (const key of keys) {
+    if (options[key] !== DEFAULT_CELL_SETTINGS[key]) {
+      manimJupyter[key] = options[key];
+    }
+  }
   return {
-    manimJupyterCellType: "manim",
-    vscode: { languageId: "python" },
-    manimJupyter: { ...options, version: 4 },
-    slideshow: { slide_type: options.ppt ? "slide" : "skip" },
+    manimJupyter,
   };
 }
 
@@ -69,7 +86,6 @@ export function notebookManimCellMetadata(
     ...cloneRecord(next.metadata),
     ...rawManimCellMetadata(options),
   };
-  // This extension only supports the canonical *.manim.ipynb schema.
   delete next.custom;
   delete next.manimJupyter;
   delete next.manimJupyterCellType;
@@ -78,14 +94,9 @@ export function notebookManimCellMetadata(
 }
 
 export function rawPythonCellMetadata(
-  metadata: Record<string, unknown>,
+  _metadata: Record<string, unknown>,
 ): Record<string, unknown> {
-  const next = cloneRecord(metadata);
-  next.manimJupyterCellType = "python";
-  delete next.manimJupyter;
-  next.vscode = { ...cloneRecord(next.vscode), languageId: "python" };
-  next.slideshow = { slide_type: "skip" };
-  return next;
+  return { manimJupyterCellType: "python" };
 }
 
 export function notebookPythonCellMetadata(
@@ -95,19 +106,19 @@ export function notebookPythonCellMetadata(
   next.metadata = rawPythonCellMetadata(cloneRecord(next.metadata));
   delete next.custom;
   delete next.manimJupyter;
-  delete next.manimJupyterCellType;
   delete next.slideshow;
   return next;
 }
 
 export function isManimCellMetadata(metadata: Record<string, unknown>): boolean {
-  return cloneRecord(metadata.metadata).manimJupyterCellType === "manim";
+  const disk = record(metadata.metadata);
+  return disk.manimJupyter !== undefined;
 }
 
 export function readManimCellSettings(
   metadata: Record<string, unknown>,
 ): ManimCellSettings {
-  const value = rawSettings(cloneRecord(metadata.metadata).manimJupyter);
+  const value = rawSettings(record(metadata.metadata).manimJupyter);
   return {
     ppt: value.ppt ?? true,
     autoplay: value.autoplay ?? false,

@@ -2,19 +2,6 @@ const pending = new Map();
 const objectUrls = new Map();
 let nextId = 0;
 
-function bytes(value) {
-  if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  }
-  if (value && value.type === "Buffer" && Array.isArray(value.data)) {
-    return new Uint8Array(value.data);
-  }
-  if (Array.isArray(value)) return new Uint8Array(value);
-  return undefined;
-}
-
 function base64Bytes(value) {
   if (typeof value !== "string" || value.length === 0) return undefined;
   try {
@@ -104,9 +91,7 @@ export function activate(context) {
       return;
     }
     if (message.type === "videoChunk") {
-      // chunkBase64 is the canonical protocol. Keep the older decoder here
-      // only for VS Code builds that really do preserve typed arrays.
-      const chunk = base64Bytes(message.chunkBase64) || bytes(message.chunk);
+      const chunk = base64Bytes(message.chunkBase64);
       if (!chunk || chunk.byteLength === 0) {
         fail(state, "视频传输失败：VS Code Renderer 没有收到有效二进制数据。请重新运行当前 Cell。", activeStates);
         return;

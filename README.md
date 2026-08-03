@@ -7,13 +7,13 @@
 ## 运行模型
 
 - 可见 Cell 中不再写入 `class ...`、`def construct(...)`、`from manim import *`、全局 `config` 或 `%manim`。
-- Python Cell 与 Manim Cell 的编辑器语言都保持 `python`，使用显式的 `manimJupyterCellType: python | manim` 元数据区分执行路径；绝不根据源码内容猜测 Cell 类型。
+- Python Cell 与 Manim Cell 的编辑器语言都保持 `python`；Manim Cell 使用 `manimJupyter` 元数据，Python Cell 使用 `manimJupyterCellType: python` 标记，绝不根据源码内容猜测 Cell 类型。
 - `.manim.ipynb` 使用插件自己的 Notebook 控制器，通过 `jupyter_client` 启动所选解释器的真实 IPykernel，并使用标准 execute request、IOPub 输出与中断机制；不调用 Microsoft Jupyter 的私有 API，也不写入全局 `jupyter.runStartupCommands`。
 - 选择环境和运行普通 Python Cell 不会加载 Manim。只有明确的 Manim Cell 首次运行、预览或配置时才在同一个 Jupyter kernel 中加载 Manim 运行时。
 - 普通 Python Cell 与 Manim Cell 共用同一个真实 IPykernel。先在 Python Cell 中执行得到的变量、函数、类和 import 会保留到内核重启，并可由后续 Manim Cell 直接调用。
 - 环境仍由用户自行选择；插件不会替你选择，也不会改变普通 `.ipynb` 使用的 Microsoft Jupyter Kernel。
 - 点击 VS Code 原生 **Run Cell** 后，Cell 使用原生执行状态和计时；Manim/manim-slides 日志不会进入输出区，完成后只留下最终预览（失败时保留错误）。
-- 当前开发版只接受现行 `.manim.ipynb` 数据结构，不包含旧版格式迁移或向下兼容分支。
+- 当前开发版 `.manim.ipynb` 使用插件自己的紧凑 v5 JSON 结构，不包含旧版格式迁移或向下兼容分支。
 
 只有 `.manim.ipynb` 才识别 Manim Cell、对象预览与 PPT 元数据。普通 `.ipynb` 不进入任何 Manim 代码路径。
 

@@ -2,7 +2,7 @@
   "name": "manim-ce-jupyter",
   "displayName": "Manim CE for Jupyter",
   "description": "A standalone *.manim.ipynb studio with a real IPykernel, Manim, Typst, Jupyter-style HTML slides and PPTX export.",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "publisher": "feysen",
   "license": "MIT",
   "engines": {

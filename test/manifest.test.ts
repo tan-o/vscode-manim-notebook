@@ -554,10 +554,14 @@ test("the packaged acceptance notebook contains no machine-local outputs", async
   );
   const source = await readFile(filename, "utf8");
   const notebook = JSON.parse(source) as {
-    cells: Array<{ cell_type: string; execution_count?: number | null; outputs?: unknown[] }>;
+    format?: string;
+    version?: number;
+    cells: Array<{ type: string; execution_count?: number | null; outputs?: unknown[] }>;
   };
+  assert.equal(notebook.format, "manim-jupyter");
+  assert.equal(notebook.version, 5);
   assert.doesNotMatch(source, /file:\/\/\/|[A-Z]:\\\\Users\\\\/i);
-  for (const cell of notebook.cells.filter((candidate) => candidate.cell_type === "code")) {
+  for (const cell of notebook.cells.filter((candidate) => candidate.type === "code")) {
     assert.equal(cell.execution_count, null);
     assert.deepEqual(cell.outputs, []);
   }

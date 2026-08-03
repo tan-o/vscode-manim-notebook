@@ -69,10 +69,6 @@ class _ManimJupyterBoundedVideo(_ManimJupyterOriginalVideo):
                 _MANIM_JUPYTER_VIDEO_MIME: {
                     "path": str(candidate),
                     "mimeType": mime_type or "video/mp4",
-                    # Notebook output and line previews always autoplay. The
-                    # per-cell autoplay setting is only consumed by Manim
-                    # Slides (auto_next) in kernelRuntime.ts.
-                    "autoplay": True,
                     "loop": bool(_manim_jupyter_options.get("videoLoop", False)),
                     "controls": bool(options.get("controls", True)),
                     "playbackRate": float(options.get("playbackRate", 1.0)),

@@ -17,7 +17,11 @@ import {
 } from "./core";
 import { CompanionPanel } from "./companionPanel";
 import { KernelRuntime, MANIM_VIDEO_MIME } from "./kernelRuntime";
-import { MANIM_NOTEBOOK_TYPE, ManimNotebookSerializer } from "./notebookSerializer";
+import {
+  MANIM_NOTEBOOK_SCHEMA_VERSION,
+  MANIM_NOTEBOOK_TYPE,
+  ManimNotebookSerializer,
+} from "./notebookSerializer";
 import { OperationsTreeProvider } from "./navigationViews";
 import { SettingsViewProvider } from "./settingsView";
 import { TypstPresetsViewProvider } from "./typstPresetsView";
@@ -351,7 +355,7 @@ async function insertCellOfKind(
   if (kind === "python") {
     cell.metadata = notebookPythonCellMetadata({});
   } else if (kind === "markdown") {
-    cell.metadata = { metadata: { manimJupyterTypst: true, slideshow: { slide_type: "skip" } } };
+    cell.metadata = { metadata: { manimJupyterTypst: true } };
   }
   const edit = new vscode.WorkspaceEdit();
   edit.set(editor.notebook.uri, [vscode.NotebookEdit.insertCells(anchor, [cell])]);
@@ -375,7 +379,10 @@ async function defaultAddedCodeCellsToManim(
       const diskMetadata = cell.metadata.metadata && typeof cell.metadata.metadata === "object"
         ? cell.metadata.metadata as Record<string, unknown>
         : {};
-      if (diskMetadata.manimJupyterCellType === "manim" || diskMetadata.manimJupyterCellType === "python") {
+      if (
+        diskMetadata.manimJupyter !== undefined ||
+        diskMetadata.manimJupyterCellType === "python"
+      ) {
         continue;
       }
       edits.push(vscode.NotebookEdit.updateCellMetadata(
@@ -449,7 +456,6 @@ async function prepareManimNotebook(notebook: vscode.NotebookDocument): Promise<
               ? cell.metadata.metadata as Record<string, unknown>
               : {}),
             manimJupyterTypst: true,
-            slideshow: { slide_type: "skip" },
           },
         }
         : notebookPythonCellMetadata(cell.metadata);
@@ -477,19 +483,15 @@ async function newNotebook(): Promise<void> {
     : destination.with({ path: destination.path.replace(/\.ipynb$/i, "") + MANIM_NOTEBOOK_SUFFIX });
   const source = buildSceneCell("WelcomeScene");
   const contents = {
+    format: "manim-jupyter",
+    version: MANIM_NOTEBOOK_SCHEMA_VERSION,
     cells: [{
-      cell_type: "code",
+      type: "code",
       execution_count: null,
       metadata: rawManimCellMetadata(DEFAULT_CELL_SETTINGS),
       outputs: [],
-      source: source.split(/(?<=\n)/),
+      source,
     }],
-    metadata: {
-      manimJupyter: { version: 4, oneCellOneSlide: true },
-      language_info: { name: "python" },
-    },
-    nbformat: 4,
-    nbformat_minor: 5,
   };
   await vscode.workspace.fs.writeFile(target, Buffer.from(JSON.stringify(contents, null, 2), "utf8"));
   await openManimNotebook(target);

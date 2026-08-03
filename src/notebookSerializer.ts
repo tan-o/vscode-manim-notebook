@@ -1,59 +1,17 @@
 import * as vscode from "vscode";
-import { pathToFileURL } from "node:url";
 import {
   DEFAULT_CELL_SETTINGS,
   buildSceneCell,
-  readManimCellSettings,
-  rawPythonCellMetadata,
   rawManimCellMetadata,
+  rawPythonCellMetadata,
 } from "./core";
 
 export const MANIM_NOTEBOOK_TYPE = "manim-jupyter-notebook";
-export const MANIM_NOTEBOOK_SCHEMA_VERSION = 4;
+export const MANIM_NOTEBOOK_SCHEMA_VERSION = 5;
 const MANIM_VIDEO_MIME = "application/vnd.manim.video+json";
 
-interface ManimVideoDescriptor {
-  path?: unknown;
-  mimeType?: unknown;
-  autoplay?: unknown;
-  loop?: unknown;
-  controls?: unknown;
-  playbackRate?: unknown;
-  width?: unknown;
-}
-
-function htmlAttribute(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function serializedVideoHtml(data: Uint8Array): string | undefined {
-  try {
-    const descriptor = JSON.parse(Buffer.from(data).toString("utf8")) as ManimVideoDescriptor;
-    if (typeof descriptor.path !== "string" || !descriptor.path.trim()) return undefined;
-    const source = htmlAttribute(pathToFileURL(descriptor.path).href);
-    const mimeType = htmlAttribute(typeof descriptor.mimeType === "string" ? descriptor.mimeType : "video/mp4");
-    const width = typeof descriptor.width === "string" && /^(?:\d+(?:\.\d+)?)(?:%|px|rem|em|vw)$/.test(descriptor.width)
-      ? descriptor.width
-      : "100%";
-    const loop = descriptor.loop === true;
-    const controls = descriptor.controls !== false;
-    const rate = typeof descriptor.playbackRate === "number" && Number.isFinite(descriptor.playbackRate)
-      ? Math.max(0.1, descriptor.playbackRate)
-      : 1;
-    const attributes = [
-      controls ? "controls" : "",
-      "autoplay muted",
-      loop ? "loop" : "",
-      "playsinline preload=\"auto\"",
-    ].filter(Boolean).join(" ");
-    return `<video ${attributes} style="display:block;max-width:100%;max-height:82vh;width:${htmlAttribute(width)};margin:0 auto;object-fit:contain" onloadedmetadata="this.playbackRate=${rate};"><source src="${source}" type="${mimeType}"></video>`;
-  } catch {
-    return undefined;
-  }
-}
-
 interface RawNotebookCell {
-  cell_type?: unknown;
+  type?: unknown;
   source?: unknown;
   metadata?: unknown;
   outputs?: unknown;
@@ -61,10 +19,9 @@ interface RawNotebookCell {
 }
 
 interface RawNotebook {
+  format?: unknown;
+  version?: unknown;
   cells?: unknown;
-  metadata?: unknown;
-  nbformat?: unknown;
-  nbformat_minor?: unknown;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -74,36 +31,11 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function sourceText(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === "string").join("");
-  }
-  return "";
-}
-
-function splitSource(value: string): string[] {
-  return value ? value.match(/.*(?:\r?\n|$)/g)?.filter(Boolean) ?? [value] : [];
-}
-
-function canonicalDiskCellMetadata(
-  metadata: Record<string, unknown>,
-  kind: vscode.NotebookCellKind,
-): Record<string, unknown> {
-  if (kind === vscode.NotebookCellKind.Markup) {
-    return {
-      ...metadata,
-      manimJupyterTypst: true,
-      slideshow: { slide_type: "skip" },
-    };
-  }
-  if (metadata.manimJupyterCellType === "manim") {
-    return {
-      ...metadata,
-      ...rawManimCellMetadata(readManimCellSettings({ metadata })),
-      vscode: { ...record(metadata.vscode), languageId: "python" },
-    };
-  }
-  return rawPythonCellMetadata(metadata);
+  return typeof value === "string"
+    ? value
+    : Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string").join("")
+      : "";
 }
 
 function outputItems(value: unknown): vscode.NotebookCellOutputItem[] {
@@ -128,7 +60,11 @@ function outputItems(value: unknown): vscode.NotebookCellOutputItem[] {
     if (mime.startsWith("image/") && typeof content === "string") {
       return new vscode.NotebookCellOutputItem(Buffer.from(content, "base64"), mime);
     }
-    const text = typeof content === "string" ? content : JSON.stringify(content);
+    const text = typeof content === "string"
+      ? content
+      : content === undefined
+        ? ""
+        : JSON.stringify(content);
     return new vscode.NotebookCellOutputItem(Buffer.from(text, "utf8"), mime);
   });
 }
@@ -164,7 +100,7 @@ function serializeOutput(output: vscode.NotebookCellOutput): Record<string, unkn
     return {
       output_type: "stream",
       name: stderr ? "stderr" : "stdout",
-      text: splitSource(Buffer.from(item.data).toString("utf8")),
+      text: Buffer.from(item.data).toString("utf8"),
     };
   }
   const data: Record<string, unknown> = {};
@@ -175,22 +111,34 @@ function serializeOutput(output: vscode.NotebookCellOutput): Record<string, unkn
       continue;
     }
     const text = content.toString("utf8");
-    if (item.mime === "application/json") {
+    if (item.mime === MANIM_VIDEO_MIME || item.mime === "application/json") {
       try {
         data[item.mime] = JSON.parse(text);
         continue;
       } catch {
-        // Preserve invalid JSON as text instead of dropping user output.
+        // Keep malformed JSON as text instead of dropping user output.
       }
     }
     data[item.mime] = text;
   }
-  const manimVideo = output.items.find((item) => item.mime === MANIM_VIDEO_MIME);
-  if (manimVideo) {
-    const html = serializedVideoHtml(manimVideo.data);
-    if (html) data["text/html"] = html;
+  const serialized: Record<string, unknown> = { output_type: "display_data", data };
+  if (output.metadata && Object.keys(output.metadata).length) {
+    serialized.metadata = output.metadata;
   }
-  return { output_type: "display_data", data, metadata: output.metadata ?? {} };
+  return serialized;
+}
+
+function canonicalDiskCellMetadata(
+  metadata: Record<string, unknown>,
+  kind: vscode.NotebookCellKind,
+): Record<string, unknown> {
+  if (kind === vscode.NotebookCellKind.Markup) {
+    return { manimJupyterTypst: true };
+  }
+  if (metadata.manimJupyter !== undefined) {
+    return { manimJupyter: metadata.manimJupyter };
+  }
+  return rawPythonCellMetadata(metadata);
 }
 
 export class ManimNotebookSerializer implements vscode.NotebookSerializer {
@@ -200,18 +148,10 @@ export class ManimNotebookSerializer implements vscode.NotebookSerializer {
       const cell = new vscode.NotebookCellData(
         vscode.NotebookCellKind.Code,
         buildSceneCell("WelcomeScene"),
-        "manim",
+        "python",
       );
       cell.metadata = { metadata: rawManimCellMetadata(DEFAULT_CELL_SETTINGS) };
-      const notebook = new vscode.NotebookData([cell]);
-      notebook.metadata = {
-        manimJupyter: {
-          version: MANIM_NOTEBOOK_SCHEMA_VERSION,
-          oneCellOneSlide: true,
-        },
-        language_info: { name: "python" },
-      };
-      return notebook;
+      return new vscode.NotebookData([cell]);
     }
     let raw: RawNotebook;
     try {
@@ -219,22 +159,25 @@ export class ManimNotebookSerializer implements vscode.NotebookSerializer {
     } catch (error) {
       throw new Error(`Invalid *.manim.ipynb JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const notebookMetadata = record(raw.metadata);
-    const schema = record(notebookMetadata.manimJupyter);
-    if (raw.nbformat !== 4 || schema.version !== MANIM_NOTEBOOK_SCHEMA_VERSION) {
+    if (
+      raw.format !== "manim-jupyter" ||
+      raw.version !== MANIM_NOTEBOOK_SCHEMA_VERSION
+    ) {
       throw new Error(
         `This development build only supports canonical *.manim.ipynb schema v${MANIM_NOTEBOOK_SCHEMA_VERSION}.`,
       );
     }
     const rawCells = Array.isArray(raw.cells) ? raw.cells as RawNotebookCell[] : [];
     const cells = rawCells.map((cell) => {
-      const kind = cell.cell_type === "markdown"
+      const kind = cell.type === "markdown"
         ? vscode.NotebookCellKind.Markup
         : vscode.NotebookCellKind.Code;
-      const diskMetadata = canonicalDiskCellMetadata(record(cell.metadata), kind);
-      const language = kind === vscode.NotebookCellKind.Markup ? "markdown" : "python";
-      const data = new vscode.NotebookCellData(kind, sourceText(cell.source), language);
-      data.metadata = { metadata: diskMetadata };
+      const data = new vscode.NotebookCellData(
+        kind,
+        sourceText(cell.source),
+        kind === vscode.NotebookCellKind.Markup ? "markdown" : "python",
+      );
+      data.metadata = { metadata: canonicalDiskCellMetadata(record(cell.metadata), kind) };
       if (kind === vscode.NotebookCellKind.Code) {
         data.executionSummary = typeof cell.execution_count === "number"
           ? { executionOrder: cell.execution_count }
@@ -245,49 +188,34 @@ export class ManimNotebookSerializer implements vscode.NotebookSerializer {
       }
       return data;
     });
-    const notebook = new vscode.NotebookData(cells);
-    notebook.metadata = {
-      ...notebookMetadata,
-      language_info: { ...record(notebookMetadata.language_info), name: "python" },
-    };
-    return notebook;
+    return new vscode.NotebookData(cells);
   }
 
   serializeNotebook(data: vscode.NotebookData): Uint8Array {
-    const metadata = {
-      ...record(data.metadata),
-      manimJupyter: {
-        ...record(record(data.metadata).manimJupyter),
-        version: MANIM_NOTEBOOK_SCHEMA_VERSION,
-        oneCellOneSlide: true,
-      },
-      language_info: { ...record(record(data.metadata).language_info), name: "python" },
-    };
     const cells = data.cells.map((cell) => {
       const diskMetadata = record(record(cell.metadata).metadata);
       if (cell.kind === vscode.NotebookCellKind.Markup) {
         return {
-          cell_type: "markdown",
-          metadata: canonicalDiskCellMetadata(diskMetadata, cell.kind),
-          source: splitSource(cell.value),
+          type: "markdown",
+          source: cell.value,
+          metadata: { manimJupyterTypst: true },
         };
       }
-      const metadataForDisk = diskMetadata.manimJupyterCellType === "manim"
-        ? canonicalDiskCellMetadata(diskMetadata, cell.kind)
+      const metadata = diskMetadata.manimJupyter !== undefined
+        ? { manimJupyter: diskMetadata.manimJupyter }
         : rawPythonCellMetadata(diskMetadata);
       return {
-        cell_type: "code",
+        type: "code",
         execution_count: cell.executionSummary?.executionOrder ?? null,
-        metadata: metadataForDisk,
+        metadata,
         outputs: (cell.outputs ?? []).map(serializeOutput),
-        source: splitSource(cell.value),
+        source: cell.value,
       };
     });
     return Buffer.from(JSON.stringify({
+      format: "manim-jupyter",
+      version: MANIM_NOTEBOOK_SCHEMA_VERSION,
       cells,
-      metadata,
-      nbformat: 4,
-      nbformat_minor: 5,
     }, null, 2), "utf8");
   }
 }
