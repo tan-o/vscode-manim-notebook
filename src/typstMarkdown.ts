@@ -122,6 +122,7 @@ export class TypstMarkdownService implements vscode.Disposable {
           message.type !== "renderTypst" ||
           !message.id ||
           typeof message.expression !== "string" ||
+          event.editor.notebook.notebookType !== MANIM_NOTEBOOK_TYPE ||
           !isManimNotebookPath(event.editor.notebook.uri.path)
         ) {
           return;
@@ -179,6 +180,7 @@ export class TypstMarkdownService implements vscode.Disposable {
 
   private notebookForDocument(document: vscode.TextDocument): vscode.NotebookDocument | undefined {
     return vscode.workspace.notebookDocuments.find((candidate) =>
+      candidate.notebookType === MANIM_NOTEBOOK_TYPE &&
       isManimNotebookPath(candidate.uri.path) &&
       candidate.getCells().some((cell) => cell.document.uri.toString() === document.uri.toString()),
     );

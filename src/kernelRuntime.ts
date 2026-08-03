@@ -361,7 +361,7 @@ class PythonWorker implements vscode.Disposable {
     const response = new Promise<WorkerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error("Manim execution exceeded 15 minutes."));
+        reject(new Error("Kernel execution exceeded 15 minutes."));
       }, EXECUTION_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timer });
     });

@@ -10,6 +10,7 @@ import {
   previewAtLine,
 } from "./core";
 import { KernelOutput, LinePreviewResult } from "./kernelRuntime";
+import { MANIM_NOTEBOOK_TYPE } from "./notebookSerializer";
 import {
   documentationSymbol,
   isOfficialManimDocsUrl,
@@ -183,7 +184,11 @@ function cellLabel(cell: vscode.NotebookCell | undefined): string {
 }
 
 function isManimNotebook(notebook: vscode.NotebookDocument | undefined): boolean {
-  return Boolean(notebook && isManimNotebookPath(notebook.uri.path));
+  return Boolean(
+    notebook &&
+    notebook.notebookType === MANIM_NOTEBOOK_TYPE &&
+    isManimNotebookPath(notebook.uri.path),
+  );
 }
 
 export class CompanionPanel implements vscode.Disposable {
