@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Manim Python",
+  "scopeName": "source.manim-python",
+  "patterns": [
+    {
+      "include": "source.python"
+    }
+  ]
+}

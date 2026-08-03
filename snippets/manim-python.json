@@ -1,0 +1,33 @@
+{
+  "Manim Jupyter Scene": {
+    "prefix": "manim-scene",
+    "body": [
+      "from manim import *",
+      "",
+      "class ${1:MyScene}(Scene):",
+      "    def construct(self):",
+      "        ${2:formula} = TypstMath(r\"${3:sum_(k=1)^n k = (n(n+1))/2}\")",
+      "        self.play(Write(${2:formula}))",
+      "        self.wait(${4:0.5})",
+      "",
+      "%manim -qm -v WARNING --progress_bar display --disable_caching ${1:MyScene}"
+    ],
+    "description": "Create a Manim scene cell that renders inline in Jupyter."
+  },
+  "Manim Slides Scene": {
+    "prefix": "manim-slides",
+    "body": [
+      "from manim import *",
+      "from manim_slides import ManimSlidesMagic, Slide",
+      "",
+      "class ${1:MySlides}(Slide):",
+      "    def construct(self):",
+      "        ${2:title} = Typst(\"#text(size: 36pt)[${3:Title}]\")",
+      "        self.play(Write(${2:title}))",
+      "        self.next_slide()",
+      "",
+      "%manim_slides -qm -v WARNING --progress_bar display --disable_caching ${1:MySlides}"
+    ],
+    "description": "Create a Manim Slides cell for later PowerPoint export."
+  }
+}

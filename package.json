@@ -1,0 +1,355 @@
+{
+  "name": "manim-ce-jupyter",
+  "displayName": "Manim CE for Jupyter",
+  "description": "A standalone *.manim.ipynb studio with a real IPykernel, Manim, Typst, Jupyter-style HTML slides and PPTX export.",
+  "version": "0.16.0",
+  "publisher": "feysen",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Notebooks",
+    "Visualization",
+    "Education"
+  ],
+  "keywords": [
+    "manim",
+    "manimce",
+    "jupyter",
+    "notebook",
+    "typst",
+    "animation",
+    "slides",
+    "powerpoint"
+  ],
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
+  "activationEvents": [
+    "onNotebook:manim-jupyter-notebook",
+    "onRenderer:manimJupyter.video-renderer",
+    "onRenderer:manimJupyter.typst-markdown-renderer",
+    "onCommand:manimJupyter.newNotebook",
+    "onView:manimJupyter.operations",
+    "onView:manimJupyter.settings",
+    "onView:manimJupyter.typstPresets"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "notebooks": [
+      {
+        "type": "manim-jupyter-notebook",
+        "displayName": "Manim Jupyter Notebook",
+        "selector": [
+          {
+            "filenamePattern": "*.manim.ipynb"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "manimJupyter.newNotebook",
+        "title": "New Manim Jupyter Notebook",
+        "category": "Manim Jupyter",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "manimJupyter.openNotebook",
+        "title": "Open Manim Notebook",
+        "category": "Manim Jupyter",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "manimJupyter.renderCell",
+        "title": "Render Cell with Manim",
+        "category": "Manim Jupyter",
+        "icon": "$(play)"
+      },
+      {
+        "command": "manimJupyter.insertCell",
+        "title": "Insert Manim, Python, or Markdown Cell",
+        "category": "Manim Jupyter",
+        "icon": "$(add)"
+      },
+      {
+        "command": "manimJupyter.insertManimCell",
+        "title": "Insert Manim Cell",
+        "shortTitle": "$(add) Manim",
+        "category": "Manim Jupyter",
+        "icon": "$(add)"
+      },
+      {
+        "command": "manimJupyter.changeCodeCellType",
+        "title": "Toggle Python / Manim Cell",
+        "category": "Manim Jupyter",
+        "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "manimJupyter.configureCell",
+        "title": "Configure Manim / PPT for Current Cell",
+        "category": "Manim Jupyter",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "manimJupyter.checkKernel",
+        "title": "Check Selected Manim Python Environment",
+        "category": "Manim Jupyter",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "manimJupyter.openDocs",
+        "title": "Search Manim Documentation",
+        "category": "Manim Jupyter",
+        "icon": "$(book)"
+      },
+      {
+        "command": "manimJupyter.exportPptx",
+        "title": "Export Manim Slides to PPTX",
+        "category": "Manim Jupyter",
+        "icon": "$(file-media)"
+      },
+      {
+        "command": "manimJupyter.playPresentation",
+        "title": "Present as Jupyter HTML Slides",
+        "category": "Manim Jupyter",
+        "icon": "$(play-circle)"
+      },
+      {
+        "command": "manimJupyter.openCompanion",
+        "title": "Open Preview and Contextual Help",
+        "category": "Manim Jupyter",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "manimJupyter.insertTypstPreset",
+        "title": "Insert Typst Preset",
+        "category": "Manim Jupyter",
+        "icon": "$(symbol-operator)"
+      }
+    ],
+    "menus": {
+      "notebook/cell/title": [
+        {
+          "command": "manimJupyter.configureCell",
+          "when": "notebookType == manim-jupyter-notebook && notebookCellType == code && manimJupyter.isManimNotebook && manimJupyter.isManimCell",
+          "group": "inline@1"
+        },
+        {
+          "command": "manimJupyter.changeCodeCellType",
+          "when": "notebookType == manim-jupyter-notebook && notebookCellType == code && manimJupyter.isManimNotebook",
+          "group": "inline@2"
+        }
+      ],
+      "notebook/toolbar": [
+        {
+          "command": "manimJupyter.insertManimCell",
+          "when": "notebookType == manim-jupyter-notebook && manimJupyter.isManimNotebook",
+          "group": "navigation@-10"
+        },
+        {
+          "command": "manimJupyter.playPresentation",
+          "when": "notebookType == manim-jupyter-notebook && manimJupyter.isManimNotebook",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "manimJupyter.renderCell",
+          "when": "activeEditor == workbench.editor.notebook && manimJupyter.isManimNotebook"
+        },
+        {
+          "command": "manimJupyter.insertManimCell",
+          "when": "activeEditor == workbench.editor.notebook && manimJupyter.isManimNotebook"
+        },
+        {
+          "command": "manimJupyter.changeCodeCellType",
+          "when": "activeEditor == workbench.editor.notebook && manimJupyter.isManimNotebook"
+        },
+        {
+          "command": "manimJupyter.playPresentation",
+          "when": "activeEditor == workbench.editor.notebook && manimJupyter.isManimNotebook"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "manimJupyter.openCompanion",
+          "when": "viewContainer == manimJupyter",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "notebookRenderer": [
+      {
+        "id": "manimJupyter.video-renderer",
+        "displayName": "Manim streamed video",
+        "entrypoint": "./renderer/manimVideo.js",
+        "mimeTypes": [
+          "application/vnd.manim.video+json",
+          "application/vnd.manim.progress+json"
+        ],
+        "requiresMessaging": "always"
+      },
+      {
+        "id": "manimJupyter.typst-markdown-renderer",
+        "displayName": "Manim Typst Markdown",
+        "entrypoint": {
+          "extends": "vscode.markdown-it-renderer",
+          "path": "./renderer/typstMarkdown.js"
+        },
+        "requiresMessaging": "always"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "manimJupyter.renderCell",
+        "key": "ctrl+alt+m",
+        "mac": "cmd+alt+m",
+        "when": "notebookEditorFocused && notebookType == manim-jupyter-notebook && manimJupyter.isManimNotebook"
+      }
+    ],
+    "configuration": {
+      "title": "Manim Jupyter",
+      "properties": {
+        "manimJupyter.quality": {
+          "type": "string",
+          "enum": [
+            "l",
+            "m",
+            "h",
+            "p",
+            "k"
+          ],
+          "enumDescriptions": [
+            "Low quality (fast preview)",
+            "Medium quality",
+            "High quality",
+            "Production quality",
+            "4K quality"
+          ],
+          "default": "m",
+          "description": "Quality used by the hidden whole-cell Manim render."
+        },
+        "manimJupyter.renderer": {
+          "type": "string",
+          "enum": [
+            "cairo",
+            "opengl"
+          ],
+          "default": "cairo",
+          "description": "Renderer used by background Manim rendering."
+        },
+        "manimJupyter.disableCaching": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable Manim's animation cache for predictable notebook previews."
+        },
+        "manimJupyter.mediaWidth": {
+          "type": "string",
+          "default": "100%",
+          "description": "Maximum width of the video shown below a Jupyter cell."
+        },
+        "manimJupyter.theme": {
+          "type": "string",
+          "enum": [
+            "dark",
+            "light",
+            "paper",
+            "blueprint",
+            "custom"
+          ],
+          "default": "dark",
+          "description": "Scene color theme selected in the graphical settings panel."
+        },
+        "manimJupyter.backgroundColor": {
+          "type": "string",
+          "default": "#0E1117",
+          "description": "Default scene background color."
+        },
+        "manimJupyter.foregroundColor": {
+          "type": "string",
+          "default": "#F8FAFC",
+          "description": "Foreground color exposed to scene cells as MANIM_FOREGROUND."
+        },
+        "manimJupyter.pixelWidth": {
+          "type": "number",
+          "minimum": 320,
+          "maximum": 3840,
+          "default": 1280,
+          "description": "Output video width; height is derived from the selected aspect ratio."
+        },
+        "manimJupyter.aspectRatio": {
+          "type": "string",
+          "enum": [
+            "16:9",
+            "4:3",
+            "1:1",
+            "9:16"
+          ],
+          "default": "16:9",
+          "description": "Scene and output aspect ratio."
+        },
+        "manimJupyter.frameRate": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 120,
+          "default": 30,
+          "description": "Output video frame rate."
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "python",
+        "path": "./snippets/manim-python.json"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "manimJupyter",
+          "title": "Manim Jupyter",
+          "icon": "assets/manim-jupyter.svg"
+        }
+      ]
+    },
+    "views": {
+      "manimJupyter": [
+        {
+          "id": "manimJupyter.operations",
+          "name": "快捷操作",
+          "visibility": "visible"
+        },
+        {
+          "type": "webview",
+          "id": "manimJupyter.settings",
+          "name": "Scene 全局场景设置",
+          "visibility": "visible"
+        },
+        {
+          "type": "webview",
+          "id": "manimJupyter.typstPresets",
+          "name": "Typst 预设字符",
+          "visibility": "visible"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test out/test/*.test.js",
+    "package": "npm run test && npx @vscode/vsce package --no-dependencies --out dist/manim-ce-jupyter.vsix",
+    "copy-reveal": "node scripts/copy-reveal.js",
+    "vscode:prepublish": "npm run copy-reveal && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.95.0",
+    "@vscode/vsce": "^3.2.1",
+    "reveal.js": "^6.0.1",
+    "typescript": "^5.7.2"
+  }
+}

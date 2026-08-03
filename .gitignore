@@ -1,0 +1,16 @@
+node_modules/
+out/
+dist/
+media/
+slides/
+examples/media/
+examples/slides/
+examples/*.pptx
+logs/
+.tmp-*/
+reference-sources/
+upstream/
+**/__pycache__/
+*.pyc
+.vscode-test/
+*.vsix
