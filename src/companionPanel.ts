@@ -46,6 +46,9 @@ interface PreviewPayload {
   autoplay: boolean;
   loop: boolean;
   controls: boolean;
+  /** Display aspect ratio (e.g. "16/9") from notebook settings; the preview
+   * is rendered at the lowest standard and stretched to this ratio. */
+  ratio?: string;
 }
 
 const HELP: Record<string, HelpEntry> = {
@@ -58,16 +61,6 @@ const HELP: Record<string, HelpEntry> = {
     title: "ThreeDScene",
     detail: "三维场景基类，可设置相机方向、光照并加入 3D Mobject。",
     url: "https://docs.manim.community/en/stable/reference/manim.scene.three_d_scene.ThreeDScene.html",
-  },
-  play: {
-    title: "self.play(...)",
-    detail: "播放一个或多个 Animation。右上预览只低清渲染光标所在的这一条动画。",
-    url: "https://docs.manim.community/en/stable/reference/manim.scene.scene.Scene.html#manim.scene.scene.Scene.play",
-  },
-  wait: {
-    title: "self.wait(...)",
-    detail: "保持当前画面指定时间；它也可以作为一条独立动画语句预览。",
-    url: "https://docs.manim.community/en/stable/reference/manim.scene.scene.Scene.html#manim.scene.scene.Scene.wait",
   },
   Create: {
     title: "Create",
@@ -104,6 +97,14 @@ const HELP: Record<string, HelpEntry> = {
     detail: "使用 Typst 数学语法渲染公式；左侧预设面板包含希腊字母、运算符和结构模板。",
     url: "https://docs.manim.community/en/latest/reference/manim.mobject.text.typst_mobject.TypstMath.html",
   },
+};
+
+/** Subset of HELP kept offline for common verbs whose docs page is not a
+ * single API page (play/wait are `Scene` methods) — everything else resolves
+ * through the official Sphinx inventory at runtime. */
+const OFFLINE_HELP: Record<string, HelpEntry> = {
+  play: HELP.play,
+  wait: HELP.wait,
 };
 
 function text(data: Uint8Array): string {
@@ -327,6 +328,12 @@ export class CompanionPanel implements vscode.Disposable {
       .get<boolean>("videoLoop", false);
   }
 
+  private aspectRatio(): string {
+    const value = vscode.workspace.getConfiguration("manimJupyter")
+      .get<string>("aspectRatio", "16:9");
+    return value === "4:3" ? "4/3" : value === "1:1" ? "1/1" : value === "9:16" ? "9/16" : "16/9";
+  }
+
   private async refreshPreview(generation: number): Promise<void> {
     if (this.previewRunning) {
       this.previewQueued = true;
@@ -362,6 +369,7 @@ export class CompanionPanel implements vscode.Disposable {
           autoplay: true,
           loop: this.videoLoop(),
           controls: options.controls,
+          ratio: this.aspectRatio(),
         });
       }
       const result = await this.previewLine(cell, line);
@@ -385,6 +393,7 @@ export class CompanionPanel implements vscode.Disposable {
         autoplay: true,
         loop: this.videoLoop(),
         controls: options.controls,
+        ratio: this.aspectRatio(),
       });
     } finally {
       this.previewRunning = false;
@@ -404,6 +413,7 @@ export class CompanionPanel implements vscode.Disposable {
       autoplay: true,
       loop: this.videoLoop(),
       controls: options.controls,
+      ratio: this.aspectRatio(),
     };
   }
 
@@ -435,6 +445,7 @@ export class CompanionPanel implements vscode.Disposable {
                 autoplay: true,
                 loop: this.videoLoop(),
                 controls: options.controls,
+                ratio: this.aspectRatio(),
               };
             }
           } catch {
@@ -451,6 +462,7 @@ export class CompanionPanel implements vscode.Disposable {
             autoplay: true,
             loop: this.videoLoop(),
             controls: options.controls,
+            ratio: this.aspectRatio(),
           };
         }
         if (item.mime === "image/svg+xml") {
@@ -463,6 +475,7 @@ export class CompanionPanel implements vscode.Disposable {
             autoplay: true,
             loop: this.videoLoop(),
             controls: options.controls,
+            ratio: this.aspectRatio(),
           };
         }
         if (item.mime === "text/html") {
@@ -476,6 +489,7 @@ export class CompanionPanel implements vscode.Disposable {
               autoplay: true,
               loop: this.videoLoop(),
               controls: options.controls,
+              ratio: this.aspectRatio(),
             };
           }
         }
@@ -487,6 +501,7 @@ export class CompanionPanel implements vscode.Disposable {
             autoplay: true,
             loop: this.videoLoop(),
             controls: options.controls,
+            ratio: this.aspectRatio(),
           };
         }
         if (item.mime.includes("stdout") || item.mime.includes("stderr") || item.mime === "text/plain") {
@@ -502,6 +517,7 @@ export class CompanionPanel implements vscode.Disposable {
       autoplay: true,
       loop: this.videoLoop(),
       controls: options.controls,
+      ratio: this.aspectRatio(),
     };
   }
 
@@ -829,20 +845,20 @@ export class CompanionPanel implements vscode.Disposable {
       // Manim cells always resolve to the official Manim documentation.
       const source = canonicalManimCellSource(cell.document.getText());
       const statement = previewAtLine(source, lineNumber)?.text ?? line;
-      const searchable = `${cursorWord}\n${line}\n${statement}`;
-      const token = Object.keys(HELP).find((name) =>
-        new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(searchable),
-      );
-      if (token) {
-        return {
-          code: statement || token,
-          help: HELP[token],
-          mode: "manim",
-          panelTitle: "Manim 官方文档",
-        };
-      }
       const helpWord = documentationSymbol(cursorWord, statement) ?? "";
       if (/^[A-Za-z_]\w*$/.test(helpWord)) {
+        // Prefer the exact symbol the cursor is on; the offline table only
+        // overrides the two Scene methods (play/wait). Anything else resolves
+        // against the official Sphinx inventory at runtime.
+        const offline = OFFLINE_HELP[helpWord];
+        if (offline) {
+          return {
+            code: statement || helpWord,
+            help: offline,
+            mode: "manim",
+            panelTitle: "Manim 官方文档",
+          };
+        }
         return {
           code: statement || helpWord,
           mode: "manim",
@@ -899,8 +915,14 @@ export class CompanionPanel implements vscode.Disposable {
     .preview-body { position:relative;min-height:0;display:grid;place-items:center;padding:38px 16px 16px;overflow:hidden; }
     .preview-meta { position:absolute;left:12px;top:9px;color:var(--vscode-descriptionForeground);font-size:12px; }
     .statement { position:absolute;right:12px;top:9px;left:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;font:12px var(--vscode-editor-font-family); }
+    /* The preview media is rendered at the lowest standard (e.g. 854×480) and
+       displayed stretched to the configured aspect ratio: pixel density is
+       traded for speed, the layout stays exactly the setting's ratio.
+       width:100% + aspect-ratio lock the shape; max-height only shrinks it
+       proportionally when the panel is short, so resizing the window never
+       distorts the video. */
     .media { display:none;max-width:100%;max-height:100%;border:1px solid var(--vscode-panel-border);background:#000;box-shadow:0 4px 18px rgba(0,0,0,.22); }
-    video.media { width:100%; }
+    video.media,img.media { width:100%;max-height:100%;aspect-ratio:var(--preview-ratio,16/9);object-fit:fill; }
     .empty { max-width:440px;text-align:center;color:var(--vscode-descriptionForeground); }
     .empty strong { display:block;margin-bottom:8px;color:var(--vscode-foreground);font-size:15px; }
     .message { max-height:110px;overflow:auto;margin:0 0 14px;white-space:pre-wrap;font:12px/1.45 var(--vscode-editor-font-family); }
@@ -960,6 +982,8 @@ export class CompanionPanel implements vscode.Disposable {
       }
       document.getElementById('cellLabel').textContent=p.cellLabel;
       document.getElementById('statement').textContent=p.statement||'';
+      // Stretch the low-standard preview to the configured aspect ratio.
+      const ratio=p.ratio||'16/9';video.style.setProperty('--preview-ratio',ratio);image.style.aspectRatio=ratio;image.style.objectFit='fill';
       video.pause();video.oncanplay=null;video.oncanplaythrough=null;video.onloadedmetadata=null;video.onerror=null;video.removeAttribute('src');
       image.removeAttribute('src');video.style.display='none';image.style.display='none';empty.style.display='block';
       spinner.style.display=p.kind==='rendering'?'block':'none';

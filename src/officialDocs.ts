@@ -109,6 +109,34 @@ function extractFragment(html: string, fragment: string): string {
   return section?.[0] ?? html;
 }
 
+/**
+ * Furo (the Manim docs theme) does not give every API a `<dl id="...">`
+ * fragment; many pages only carry the module-level `<dl>` and per-method
+ * headings. When a fragment cannot be matched structurally, fall back to the
+ * heading (`<h2>` / `<h3>` / `<dt>` / `<h4>`) whose id equals the fragment and
+ * cut the article there, so the panel shows the single requested API instead
+ * of the whole page.
+ */
+function extractHeadingFragment(html: string, fragment: string): string {
+  if (!fragment) return html;
+  const escaped = escapeRegExp(fragment);
+  const heading = html.match(
+    new RegExp(`<(?:h[234]|dt)\\b[^>]*\\bid=["']${escaped}["'][^>]*>[\\s\\S]*?(?=<\\/(?:h[234]|dt)>)`, "i"),
+  );
+  if (!heading) return html;
+  const start = heading.index ?? 0;
+  const after = html.slice(start);
+  // The requested API's definition block runs until the next heading of the
+  // same or higher level, or a sibling `<dt>`.
+  const next = after.match(/<(?:h[234]|dt)\b[^>]*>/g) ?? [];
+  let end = html.length;
+  if (next.length > 1) {
+    const nextStart = html.indexOf(next[1], start);
+    if (nextStart > start) end = nextStart;
+  }
+  return html.slice(start, end);
+}
+
 function safeAttribute(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -143,6 +171,7 @@ export function extractOfficialDocHtml(rawHtml: string, sourceUrl: string): stri
     // Keep malformed-but-inert fragments literal; the page body remains usable.
   }
   let html = extractFragment(extractArticle(rawHtml), decodedFragment);
+  html = extractHeadingFragment(html, decodedFragment);
   html = html
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<(script|style|template|noscript|iframe|object|embed|svg|canvas)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
@@ -276,7 +305,6 @@ export class OfficialDocsClient {
         throw new Error(`Manim 官方 API 索引中没有找到 ${symbol}。`);
       }
     }
-
     const fresh = await this.readCache(sourceUrl);
     if (fresh && Date.now() - Date.parse(fresh.fetchedAt) < CACHE_MAX_AGE_MS) {
       return { ...fresh, cached: true, stale: false };

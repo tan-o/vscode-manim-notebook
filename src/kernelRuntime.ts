@@ -13,10 +13,10 @@ import {
   buildMagicArguments,
   canonicalManimCellSource,
   combineManimCellSources,
-  countManimAnimations,
   isManimCellMetadata,
   isManimCellSource,
   previewAtLine,
+  previewRenderSettings,
   readManimCellSettings,
   repairRevealConfig,
   sceneNameForBody,
@@ -448,6 +448,13 @@ function environmentLabel(environment: PythonEnvironment, executable: string): s
   return `${name} (${version})`;
 }
 
+/** Indent every non-blank source line for embedding inside `def construct`. */
+function indentSourceLines(source: string, indent: string): string {
+  return source.split(/\r?\n/)
+    .map((line) => line.trim() ? `${indent}${line}` : "")
+    .join("\n");
+}
+
 export class KernelRuntime implements vscode.Disposable {
   private pythonPromise: Promise<PythonApi> | undefined;
   private readonly controllers = new Map<string, vscode.NotebookController>();
@@ -834,8 +841,12 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
     if (!isManimCellSource(bodySource)) throw new Error("This Manim Cell does not define an object or animation.");
     const sceneName = sceneNameForBody(bodySource);
     const body = bodySource.split(/\r?\n/).map((line) => line.trim() ? `        ${line}` : "").join("\n");
-    const hasAnimations = /\bself\.(?:play|wait)\s*\(/.test(bodySource);
-    const hasSceneOperations = /\bself\.(?:play|wait|add|remove)\s*\(/.test(bodySource);
+    // Judge animation presence per fragment (split at next_slide boundaries)
+    // instead of on the whole merged source, so a pure-object Cell keeps its
+    // autoShow + hold even when a later Cell in the same Scene animates it.
+    const firstFragment = bodySource.split(/\r?\nself\.next_slide\s*\(/)[0];
+    const hasAnimations = /\bself\.(?:play|wait)\s*\(/.test(firstFragment);
+    const hasSceneOperations = /\bself\.(?:play|wait|add|remove)\s*\(/.test(firstFragment);
     // Pure definition cells never call self.add(...); surface every Mobject the
     // user created so the still frame shows the objects instead of an empty
     // scene. Cells that already call self.add/self.remove keep full control.
@@ -892,9 +903,29 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
       : "        self.next_slide = lambda *args, **kwargs: None\n";
     const captureRender = capturePartialMovies
       ? `    def render(self, *args, **kwargs):
-        global _MANIM_JUPYTER_PPTX_PARTIALS
+        global _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION
         _manim_jupyter_old_max_files = config["max_files_cached"]
         config["max_files_cached"] = float("inf")
+        _MANIM_JUPYTER_PPTX_PARTIALS = []
+        _manim_jupyter_original_play = self.play
+
+        def _manim_jupyter_capture_play(*play_args, **play_kwargs):
+            # 一个真实的 self.play(...) 对应一页 PPTX:先渲染,再把新增的
+            # partial movie 记入页面。wait(...) 内部也是 play(Wait),跳过,
+            # 所以纯停顿不会单独占页。
+            _manim_jupyter_before = list(self._partial_movie_files)
+            _manim_jupyter_result = _manim_jupyter_original_play(*play_args, **play_kwargs)
+            if len(play_args) == 1 and isinstance(play_args[0], Wait):
+                return _manim_jupyter_result
+            for _manim_jupyter_value in self._partial_movie_files[len(_manim_jupyter_before):]:
+                if _manim_jupyter_value is None:
+                    continue
+                _manim_jupyter_candidate = _ManimJupyterPath(_manim_jupyter_value)
+                if _manim_jupyter_candidate.is_file():
+                    _MANIM_JUPYTER_PPTX_PARTIALS.append(str(_manim_jupyter_candidate))
+            return _manim_jupyter_result
+
+        self.play = _manim_jupyter_capture_play
         try:
             _ManimJupyterManimScene.render(self, *args, **kwargs)
         finally:
@@ -903,11 +934,6 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
             int(config["pixel_width"]),
             int(config["pixel_height"]),
         )
-        _MANIM_JUPYTER_PPTX_PARTIALS = [
-            str(_ManimJupyterPath(path))
-            for path in self._partial_movie_files
-            if path is not None and _ManimJupyterPath(path).is_file()
-        ]
 `
       : "";
     const code = `# <manim-jupyter-wrapped>
@@ -1253,8 +1279,16 @@ del _manim_jupyter_configs`;
     allCellSettings: Record<string, ManimCellSettings>,
   ): Promise<LinePreviewResult | undefined> {
     if (!cellSettings.linePreview) return undefined;
-    const source = canonicalManimCellSource(cell.document.getText());
-    const preview = previewAtLine(source, cursorLine);
+    const fragments = this.manimFragmentsThrough(cell).filter((fragment) => fragment.source.trim());
+    if (!fragments.length) return undefined;
+    // Locate the statement in the current Cell's own source so line numbers
+    // match the editor, then render the full cumulative Scene (previous Cells
+    // + this statement). A range-based `-n` is deliberately not used: the
+    // static animation counter would disagree with the runtime count whenever
+    // self.play appears inside a loop, previewing a different animation.
+    const currentFragment = fragments[fragments.length - 1];
+    const cellSource = canonicalManimCellSource(currentFragment.source);
+    const preview = previewAtLine(cellSource, cursorLine);
     if (!preview || !await this.ensureRuntime(cell.notebook, settings, allCellSettings)) return undefined;
     this.linePreviewCancellation?.cancel();
     this.linePreviewCancellation?.dispose();
@@ -1263,29 +1297,21 @@ del _manim_jupyter_configs`;
     // Keep one stable preview scene name so Manim can reuse partial-movie
     // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
-    const preceding = this.manimFragmentsThrough(cell, "").filter((fragment) => fragment.source.trim());
-    const prefixSource = combineManimCellSources(preceding, false);
-    const previewSource = combineManimCellSources([
-      ...preceding,
-      { source: preview.sourceThroughStatement, settings: cellSettings },
-    ], false);
-    const body = previewSource.split(/\r?\n/)
-      .map((line) => line.trim() ? `        ${line}` : "")
-      .join("\n");
-    const previewSettings: ManimNotebookSettings = {
-      ...settings,
-      quality: "l",
-      pixelWidth: Math.min(settings.pixelWidth, 854),
-      frameRate: Math.min(settings.frameRate, 20),
-      disableCaching: false,
-    };
+    const preceding = fragments.slice(0, -1);
+    const previewSource = combineManimCellSources(
+      [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
+      false,
+    );
+    const body = indentSourceLines(previewSource, "        ");
+    // Companion previews always render at the lowest standard (long edge
+    // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
+    // stretched to the configured aspect ratio afterwards.
+    const previewSettings = previewRenderSettings(settings);
     const args = buildMagicArguments(
       previewName,
       previewSettings,
       "l",
-      preview.animationIndex === undefined
-        ? undefined
-        : countManimAnimations(prefixSource) + preview.animationIndex,
+      undefined,
       preview.kind === "object",
     );
     const objectFinish = preview.kind === "object" && preview.objectName

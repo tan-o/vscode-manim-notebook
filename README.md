@@ -30,6 +30,7 @@
 
 完整验收样例位于 `examples/manim-jupyter-acceptance.manim.ipynb`，覆盖对象静态预览、多行动画、Typst Markdown、普通 Python Cell、自动播放与 PPT 元数据。
 日常上手可直接打开 `examples/demo.manim.ipynb`，里面包含 Typst Markdown、Python 辅助 Cell 和坐标轴、公式、对象移动三类 Manim 动画。
+综合对象与动画图鉴位于 `examples/manim-object-animation-gallery.manim.ipynb`，按章节覆盖常用 2D 图元、布尔运算、文本与 Typst、坐标系、变换、路径、updater、动画编排、图表和 SVG 资源，并说明 3D 场景边界。
 
 ## Jupyter HTML Slides 交互放映与 PPTX
 

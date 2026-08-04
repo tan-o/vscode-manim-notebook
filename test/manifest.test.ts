@@ -182,16 +182,25 @@ test("Typst exclusively owns dollar math in Manim Markdown", async () => {
   assert.equal(contribution?.requiresMessaging, "always");
 });
 
-test("line preview skips slide boundaries and renders only the cursor animation range", async () => {
+test("line preview skips slide boundaries and renders at the lowest standard", async () => {
   const runtime = await readFile(
     path.resolve(__dirname, "..", "..", "src", "kernelRuntime.ts"),
     "utf8",
   );
+  const core = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "core.ts"),
+    "utf8",
+  );
   assert.match(runtime, /const previewName = "_ManimLinePreview"/);
-  assert.match(runtime, /disableCaching: false/);
   assert.match(runtime, /self\.next_slide = lambda \*args, \*\*kwargs: None/);
-  assert.match(runtime, /preview\.animationIndex/);
-  assert.match(runtime, /buildMagicArguments\([\s\S]*preview\.animationIndex/);
+  // The lowest-standard preview settings live in core.previewRenderSettings.
+  assert.match(core, /previewRenderSettings/);
+  assert.match(core, /disableCaching: false/);
+  assert.match(core, /quality: "l"/);
+  // Preview renders the full cumulative Scene: a range-based -n is
+  // deliberately not used because static animation counting would disagree
+  // with the runtime count whenever self.play appears inside a loop.
+  assert.doesNotMatch(runtime, /countManimAnimations/);
 });
 
 test("Python, Markdown, and Manim cells have strict independent execution paths", async () => {
@@ -490,8 +499,13 @@ test("PowerPoint export renders each animation through the private worker", asyn
   assert.doesNotMatch(exportImplementation, /manim_slides.*convert/);
   assert.match(startup, /def _ManimJupyterBuildPptx\(/);
   assert.match(startup, /def _ManimJupyterAutoPlayMedia\(/);
-  assert.match(startup, /for condition in xpath\(video_node, "\.\/\/p:cond"\):/);
-  assert.match(startup, /condition\.set\("delay", "0"\)/);
+  // The whole timing tree is replaced with PowerPoint's native autoplay
+  // structure (mainSeq + onBegin trigger + playFrom) — never a patch on the
+  // bare python-pptx tree, which PowerPoint ignores.
+  assert.match(startup, /_ManimJupyterTimingXml/);
+  assert.match(startup, /playFrom\(0\.0\)/);
+  assert.match(startup, /cmd="playFrom/);
+  assert.doesNotMatch(startup, /for condition in xpath\(video_node/);
 });
 
 test("presentation playback renders one continuous scene and opens Jupyter-style HTML slides", async () => {
@@ -544,13 +558,13 @@ test("the private worker can be interrupted and is released when its notebook cl
   assert.match(extension, /kernelRuntime\?\.releaseNotebook\(notebook\)/);
 });
 
-test("the packaged acceptance notebook contains no machine-local outputs", async () => {
+test("the packaged demo notebook contains no machine-local outputs", async () => {
   const filename = path.resolve(
     __dirname,
     "..",
     "..",
     "examples",
-    "manim-jupyter-acceptance.manim.ipynb",
+    "demo.manim.ipynb",
   );
   const source = await readFile(filename, "utf8");
   const notebook = JSON.parse(source) as {

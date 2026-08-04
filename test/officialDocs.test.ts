@@ -50,6 +50,19 @@ test("a URL fragment keeps the matching Sphinx API definition", () => {
   assert.doesNotMatch(result, /Finish it/);
 });
 
+test("a heading fragment cuts the article to the single requested API", () => {
+  const source = `${WRITE_URL}#manim.animation.creation.Write.finish`;
+  const raw = `<article role="main">
+    <h2 id="manim.animation.creation.Write">Write</h2><p>Whole page content.</p>
+    <h3 id="manim.animation.creation.Write.finish">finish()</h3><p>Finish the animation.</p>
+    <h3 id="manim.animation.creation.Write.begin">begin()</h3><p>Begin the animation.</p>
+  </article>`;
+  const result = extractOfficialDocHtml(raw, source);
+  assert.match(result, /Finish the animation/);
+  assert.doesNotMatch(result, /Begin the animation/);
+  assert.doesNotMatch(result, /Whole page content/);
+});
+
 test("a symbol can be resolved through the official general index", () => {
   const index = `<a href="reference/manim.animation.creation.Write.html#manim.animation.creation.Write">Write</a>`;
   assert.equal(

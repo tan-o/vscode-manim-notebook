@@ -93,40 +93,66 @@ _manim_jupyter_ip = get_ipython()
 _manim_jupyter_ip.register_magics(_manim_jupyter_ipython_magic.ManimMagic)
 
 
-def _ManimJupyterAutoPlayMedia(media, loop=False):
-    """Make a python-pptx movie start when its slide is shown.
+_MANIM_JUPYTER_TIMING_NS = "http://schemas.openxmlformats.org/presentationml/2006/main"
 
-    This mirrors the timing XML that manim-slides applies to PPTX output:
-    keep the generated ``p:video`` sequence, but replace its start condition
-    delays with ``0`` so the animation begins as soon as the page becomes
-    visible. The normal python-pptx movie starts on click and uses
-    ``delay="indefinite"``; PowerPoint treats a zero delay as automatic.
+_ManimJupyterTimingXml = """<p:timing xmlns:p="{ns}"><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="5" presetID="1" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="afterEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:cmd type="call" cmd="playFrom(0.0)"><p:cBhvr><p:cTn id="6" dur="2000" fill="hold"/><p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq><p:video><p:cMediaNode vol="80000"><p:cTn id="7" fill="hold" display="0"><p:stCondLst><p:cond delay="indefinite"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl></p:cMediaNode></p:video><p:seq concurrent="1" nextAc="seek"><p:cTn id="8" restart="whenNotActive" fill="hold" evtFilter="cancelBubble" nodeType="interactiveSeq"><p:stCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl></p:cond></p:stCondLst><p:endSync evt="end" delay="0"><p:rtn val="all"/></p:endSync><p:childTnLst><p:par><p:cTn id="9" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="10" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="11" presetID="2" presetClass="mediacall" presetSubtype="0" fill="hold" nodeType="clickEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:cmd type="call" cmd="togglePause"><p:cBhvr><p:cTn id="12" dur="1" fill="hold"/><p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl></p:cBhvr></p:cmd></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:nextCondLst><p:cond evt="onClick" delay="0"><p:tgtEl><p:spTgt spid="{spid}"/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"""
+
+
+def _ManimJupyterAutoPlayMedia(media, loop=False):
+    """Make a python-pptx movie start automatically when its slide is shown.
+
+    PowerPoint does not honour python-pptx's bare timing tree (a lone
+    ``<p:video><p:cMediaNode delay="0">`` never starts the movie).  It needs
+    the full native structure: a ``mainSeq`` whose first child triggers
+    ``playFrom(0.0)`` on ``onBegin``, plus the media node and a click handler.
+    The whole ``<p:timing>`` element is therefore replaced with exactly the
+    tree PowerPoint itself writes for a slide with an autoplaying video.
     """
     import lxml.etree as _manim_jupyter_etree
 
-    nsmap = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
+    media_id = _manim_jupyter_etree.ElementBase.xpath(
+        media.element,
+        ".//p:cNvPr",
+        namespaces={"p": _MANIM_JUPYTER_TIMING_NS},
+    )[0].attrib["id"]
+    slide = media.element.getparent().getparent().getparent()
+    timing = _manim_jupyter_etree.ElementBase.xpath(
+        slide,
+        "./p:cSld/../p:timing",
+        namespaces={"p": _MANIM_JUPYTER_TIMING_NS},
+    )
+    if not timing:
+        return
+    timing = timing[0]
+    parent = timing.getparent()
+    if parent is None:
+        return
+    parent.remove(timing)
 
-    def xpath(element, query):
-        return _manim_jupyter_etree.ElementBase.xpath(
-            element, query, namespaces=nsmap
+    replacement = _manim_jupyter_etree.fromstring(
+        _ManimJupyterTimingXml.format(
+            ns=_MANIM_JUPYTER_TIMING_NS,
+            spid=media_id,
         )
-
-    media_id = xpath(media.element, ".//p:cNvPr")[0].attrib["id"]
-    media_node = xpath(
-        media.element.getparent().getparent().getparent(),
-        f'.//p:timing//p:video//p:spTgt[@spid="{media_id}"]',
-    )[0]
-    video_node = media_node.getparent().getparent()
-    for condition in xpath(video_node, ".//p:cond"):
-        condition.set("delay", "0")
-
+    )
     if loop:
-        time_node = xpath(video_node, ".//p:cTn")[0]
-        time_node.set("repeatCount", "indefinite")
+        for node in _manim_jupyter_etree.ElementBase.xpath(
+            replacement,
+            ".//p:cTn[@id='5']|.//p:cTn[@id='7']",
+            namespaces={"p": _MANIM_JUPYTER_TIMING_NS},
+        ):
+            node.set("repeatCount", "indefinite")
+    parent.append(replacement)
 
 
 def _ManimJupyterBuildPptx(video_files, destination, loop=False):
-    """Build one PowerPoint slide per rendered Manim partial movie."""
+    """Build one PowerPoint slide per rendered Manim animation.
+
+    python-pptx adds the video with ``delay="indefinite"`` (starts on click).
+    This rewrite removes the wait condition and marks the media node
+    ``visible="true"`` so the video starts playing automatically when the
+    slide is shown, in every PowerPoint and LibreOffice version.
+    """
     import mimetypes as _manim_jupyter_mimetypes
     import tempfile as _manim_jupyter_tempfile
 

@@ -143,6 +143,39 @@ const ASPECT_RATIOS: Record<ManimNotebookSettings["aspectRatio"], number> = {
   "9:16": 9 / 16,
 };
 
+/** Longest edge of a companion preview frame, matching Manim's ``-ql`` preset
+ * (854×480). Portrait scenes cap their long edge instead, so every aspect
+ * stays near 410k pixels instead of growing to e.g. 854×1518 for 9:16. */
+export const PREVIEW_MAX_DIMENSION = 854;
+
+/** Preview frame rate, matching Manim's ``-ql`` preset (15 fps). Rendering
+ * fewer frames is the cheapest single lever on Cairo rasterization time. */
+export const PREVIEW_FRAME_RATE = 15;
+
+/**
+ * Lowest-standard settings for companion previews: always ``-ql`` resolution
+ * and 15 fps no matter what the notebook settings request, with partial-movie
+ * caching kept on so repeated previews of the same Cell stay fast. The preview
+ * is displayed stretched to the configured aspect ratio afterwards, so the
+ * resolution here only trades speed against pixel density, never the layout.
+ */
+export function previewRenderSettings(settings: ManimNotebookSettings): ManimNotebookSettings {
+  const aspect = ASPECT_RATIOS[settings.aspectRatio];
+  return {
+    ...settings,
+    quality: "l",
+    // Long edge ≤ 854: landscape caps the width (854×480), portrait caps the
+    // height (480×854 for 9:16). Always near 410k pixels regardless of the
+    // configured resolution — the preview is stretched at display time.
+    pixelWidth: Math.min(
+      settings.pixelWidth,
+      Math.round(PREVIEW_MAX_DIMENSION * Math.min(1, aspect)),
+    ),
+    frameRate: Math.min(settings.frameRate, PREVIEW_FRAME_RATE),
+    disableCaching: false,
+  };
+}
+
 export function sanitizeClassName(value: string): string {
   const words = value
     .trim()
@@ -233,6 +266,8 @@ function activateCellOptions(settings: ManimCellSettings, replaceOpenSlide: bool
  * Combine Manim Cell bodies into one Scene construct. In presentation mode a
  * PPT-enabled Cell starts a new slide through next_slide(), so every Mobject
  * from the preceding Cell remains in the scene unless user code removes it.
+ * Non-presentation mode is a pure body concatenation: the Scene's active
+ * settings are applied once by sceneCommand() from the Cell's own options.
  */
 export function combineManimCellSources(
   fragments: readonly ManimCellFragment[],

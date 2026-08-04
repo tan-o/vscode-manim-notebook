@@ -16,6 +16,7 @@ import {
   notebookManimCellMetadata,
   notebookPythonCellMetadata,
   previewAtLine,
+  previewRenderSettings,
   rawManimCellMetadata,
   rawPythonCellMetadata,
   readManimCellSettings,
@@ -241,6 +242,28 @@ test("builds whole-cell and one-animation render arguments", () => {
   );
   assert.match(buildMagicArguments("Demo", settings, "l", 2), /-n 2,2 Demo$/);
   assert.match(buildMagicArguments("Demo", settings, "l", undefined, true), /--save_last_frame Demo$/);
+});
+
+test("preview renders stay at the lowest standard and keep the set aspect ratio", () => {
+  const preview = previewRenderSettings(settings);
+  assert.equal(preview.quality, "l");
+  assert.equal(preview.frameRate, 15);
+  assert.equal(preview.pixelWidth, 854);
+  assert.equal(preview.disableCaching, false);
+  // A 9:16 portrait preview caps its long edge instead of its width.
+  const portrait = previewRenderSettings({ ...settings, aspectRatio: "9:16" });
+  assert.equal(portrait.pixelWidth, Math.round(854 * 9 / 16));
+  // 4K production settings still force the 854×480 preview footprint.
+  const production = previewRenderSettings({
+    ...settings,
+    quality: "k",
+    pixelWidth: 3840,
+    frameRate: 120,
+  });
+  assert.equal(production.pixelWidth, 854);
+  assert.equal(production.frameRate, 15);
+  // Preview renders never disable partial-movie caching.
+  assert.equal(production.disableCaching, false);
 });
 
 test("combines Manim cells in one persistent Scene and inserts only slide boundaries", () => {
