@@ -1,5 +1,6 @@
 .gitignore
 .claude/**
+CLAUDE.md
 .vscode/**
 **/.vscode/**
 .tmp-*/**
@@ -16,6 +17,7 @@ slides/**
 examples/media/**
 examples/slides/**
 examples/*.pptx
+examples/test.manim.ipynb
 logs/**
 reference-sources/**
 upstream/**

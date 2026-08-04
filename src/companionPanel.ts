@@ -897,7 +897,7 @@ export class CompanionPanel implements vscode.Disposable {
     .preview-body { position:relative;min-height:0;display:grid;place-items:center;padding:38px 16px 16px;overflow:hidden; }
     .preview-meta { position:absolute;left:12px;top:9px;color:var(--vscode-descriptionForeground);font-size:12px; }
     .statement { position:absolute;right:12px;top:9px;left:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;font:12px var(--vscode-editor-font-family); }
-    /* The preview media is rendered at the lowest standard (e.g. 854×480) and
+    /* The preview media is rendered at approximately 240p (e.g. 426×240) and
        displayed stretched to the configured aspect ratio: pixel density is
        traded for speed, the layout stays exactly the setting's ratio.
        width:100% + aspect-ratio lock the shape; max-height only shrinks it

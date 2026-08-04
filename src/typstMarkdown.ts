@@ -21,6 +21,11 @@ export interface TypstMathmlResult {
   error?: string;
 }
 
+interface TypstSvgResult {
+  svg?: string;
+  error?: string;
+}
+
 type TypstExecutableProvider = (
   notebook?: vscode.NotebookDocument,
 ) => Promise<string | undefined> | string | undefined;
@@ -36,11 +41,23 @@ interface TypstProcessResult {
 const TYPST_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const TYPST_TIMEOUT_MS = 15_000;
 
-function runTypst(executable: string, source: string): Promise<TypstProcessResult> {
+function runTypst(
+  executable: string,
+  source: string,
+  format: "html" | "svg" = "html",
+): Promise<TypstProcessResult> {
   return new Promise((resolve, reject) => {
+    const args = [
+      "compile",
+      ...(format === "html" ? ["--features", "html"] : []),
+      "--format",
+      format,
+      "-",
+      "-",
+    ];
     const child = spawn(
       executable,
-      ["compile", "--features", "html", "--format", "html", "-", "-"],
+      args,
       {
         windowsHide: true,
         stdio: ["pipe", "pipe", "pipe"],
@@ -93,6 +110,7 @@ function runTypst(executable: string, source: string): Promise<TypstProcessResul
 
 export class TypstMarkdownService implements vscode.Disposable {
   private readonly cache = new Map<string, string>();
+  private cursorHoverTimer: NodeJS.Timeout | undefined;
   private readonly messaging = vscode.notebooks.createRendererMessaging(
     TYPST_MARKDOWN_RENDERER_ID,
   );
@@ -105,7 +123,6 @@ export class TypstMarkdownService implements vscode.Disposable {
       {
         language: "markdown",
         notebookType: MANIM_NOTEBOOK_TYPE,
-        scheme: "vscode-notebook-cell",
       },
     ];
     this.disposables.push(
@@ -156,6 +173,15 @@ export class TypstMarkdownService implements vscode.Disposable {
         },
         ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.".split(""),
       ),
+      vscode.window.onDidChangeTextEditorSelection((event) => {
+        this.scheduleCursorHover(event.textEditor);
+      }),
+      vscode.workspace.onDidChangeTextDocument((event) => {
+        const editor = vscode.window.activeTextEditor;
+        if (editor?.document.uri.toString() === event.document.uri.toString()) {
+          this.scheduleCursorHover(editor);
+        }
+      }),
       vscode.window.onDidChangeActiveColorTheme(() => {
         this.cache.clear();
       }),
@@ -168,6 +194,28 @@ export class TypstMarkdownService implements vscode.Disposable {
       isManimNotebookPath(candidate.uri.path) &&
       candidate.getCells().some((cell) => cell.document.uri.toString() === document.uri.toString()),
     );
+  }
+
+  private scheduleCursorHover(editor: vscode.TextEditor): void {
+    if (this.cursorHoverTimer) clearTimeout(this.cursorHoverTimer);
+    this.cursorHoverTimer = undefined;
+    const document = editor.document;
+    if (document.languageId !== "markdown" || !this.notebookForDocument(document)) return;
+    const offset = document.offsetAt(editor.selection.active);
+    if (!mathSpanAtOffset(document.getText(), offset)) return;
+    const uri = document.uri.toString();
+    const expectedOffset = offset;
+    this.cursorHoverTimer = setTimeout(() => {
+      this.cursorHoverTimer = undefined;
+      const active = vscode.window.activeTextEditor;
+      if (
+        active?.document.uri.toString() !== uri ||
+        active.document.offsetAt(active.selection.active) !== expectedOffset
+      ) {
+        return;
+      }
+      void vscode.commands.executeCommand("editor.action.showHover");
+    }, 220);
   }
 
   private async reply(
@@ -199,6 +247,7 @@ export class TypstMarkdownService implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.cursorHoverTimer) clearTimeout(this.cursorHoverTimer);
     for (const disposable of this.disposables) {
       disposable.dispose();
     }
@@ -279,13 +328,11 @@ ${display ? `$ ${normalizedExpression} $` : `$${normalizedExpression}$`}
     if (!span) {
       return undefined;
     }
-    const rendered = await this.compile(span.expression, span.display, undefined, notebook);
-    const markdown = new vscode.MarkdownString(undefined, true);
-    markdown.supportHtml = true;
-    if (rendered.mathml) {
-      markdown.appendMarkdown(
-        `<div style="font-size:1.15em;padding:6px 10px;border:1px solid var(--vscode-panel-border);border-radius:4px">${rendered.mathml}</div>`,
-      );
+    const rendered = await this.compileHoverSvg(span.expression, span.display, notebook);
+    const markdown = new vscode.MarkdownString();
+    if (rendered.svg) {
+      const image = Buffer.from(rendered.svg, "utf8").toString("base64");
+      markdown.appendMarkdown(`![Typst 公式](data:image/svg+xml;base64,${image})`);
     } else {
       markdown.appendCodeblock(rendered.error ?? "Typst 渲染失败", "text");
     }
@@ -296,6 +343,54 @@ ${display ? `$ ${normalizedExpression} $` : `$${normalizedExpression}$`}
         document.positionAt(span.end),
       ),
     );
+  }
+
+  private async compileHoverSvg(
+    expression: string,
+    display: boolean,
+    notebook: vscode.NotebookDocument,
+  ): Promise<TypstSvgResult> {
+    const foreground = (
+      vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light ||
+      vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.HighContrastLight
+        ? "#1F2328"
+        : "#E6EDF3"
+    );
+    const normalizedExpression = normalizeTypstMathExpression(expression);
+    const key = createHash("sha1")
+      .update(`hover-svg\0${foreground}\0${display}\0${normalizedExpression}`, "utf8")
+      .digest("hex");
+    const cached = this.cache.get(key);
+    if (cached) return JSON.parse(cached) as TypstSvgResult;
+
+    const source = `#set page(width: auto, height: auto, margin: 6pt, fill: none)
+#set text(size: 16pt, fill: rgb("${escapeTypstString(foreground)}"))
+$ ${normalizedExpression} $
+`;
+    const executable = (await this.typstExecutable?.(notebook)) || "typst";
+    let result: TypstProcessResult;
+    try {
+      result = await runTypst(executable, source, "svg");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { error: `Typst 启动失败：${message}` };
+    }
+    if (result.timedOut) {
+      return { error: `Typst 编译超过 ${TYPST_TIMEOUT_MS / 1000} 秒，已停止。` };
+    }
+    if (result.overflow) return { error: "Typst 输出超过 4 MiB，已停止读取。" };
+    const svg = result.stdout.trim();
+    if (result.status !== 0 || !svg.startsWith("<svg")) {
+      return {
+        error: (result.stderr || "Typst 没有生成 SVG 公式。")
+          .replace(/\x1b\[[0-9;]*m/g, "")
+          .trim()
+          .slice(-1200),
+      };
+    }
+    const compiled: TypstSvgResult = { svg };
+    this.cache.set(key, JSON.stringify(compiled));
+    return compiled;
   }
 
   private completions(

@@ -10,13 +10,16 @@ import {
   ManimCellSettings,
   ManimCellFragment,
   ManimNotebookSettings,
+  ManimSceneClass,
   buildMagicArguments,
   canonicalManimCellSource,
   combineManimCellSources,
+  groupManimSceneSegments,
   isManimCellMetadata,
   isManimCellSource,
   previewAtLine,
   previewRenderSettings,
+  readManimCellSceneClass,
   readManimCellSettings,
   repairRevealConfig,
   sceneNameForBody,
@@ -30,8 +33,19 @@ import {
 export const MANIM_VIDEO_MIME = "application/vnd.manim.video+json";
 const WORKER_PREFIX = "__MANIM_JUPYTER_JSON__";
 const ENVIRONMENT_PREFIX = "__MANIM_JUPYTER_ENVIRONMENT__";
-const EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
+const EXECUTION_INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const PACKAGE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000;
 const SUBPROCESS_OUTPUT_LIMIT = 4 * 1024 * 1024;
+
+const LINE_PREVIEW_SCENE_CLASSES: Record<ManimSceneClass, string> = {
+  Scene: "_ManimJupyterManimScene",
+  ThreeDScene: "_ManimJupyterManimThreeDScene",
+  MovingCameraScene: "_ManimJupyterManimMovingCameraScene",
+  ZoomedScene: "_ManimJupyterManimZoomedScene",
+  VectorScene: "_ManimJupyterManimVectorScene",
+  LinearTransformationScene: "_ManimJupyterManimLinearTransformationScene",
+  SpecialThreeDScene: "_ManimJupyterSpecialThreeDPreview",
+};
 
 export interface KernelOutputItem {
   mime: string;
@@ -478,14 +492,21 @@ class PythonWorker implements vscode.Disposable {
     if (!this.isAlive) throw new Error("The selected Jupyter kernel is not running.");
     const id = ++this.nextId;
     const response = new Promise<WorkerResponse>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error("Kernel execution exceeded 15 minutes."));
-      }, EXECUTION_TIMEOUT_MS);
+      const timer = this.createInactivityTimer(id);
       this.pending.set(id, { resolve, reject, timer, onProgress });
     });
     this.process.stdin.write(`${JSON.stringify({ id, code, storeHistory })}\n`, "utf8");
     return response;
+  }
+
+  private createInactivityTimer(id: number): NodeJS.Timeout {
+    return setTimeout(() => {
+      const pending = this.pending.get(id);
+      if (!pending) return;
+      this.pending.delete(id);
+      pending.reject(new Error("Kernel 连续 15 分钟没有报告任何进度，已中断执行。"));
+      this.interrupt();
+    }, EXECUTION_INACTIVITY_TIMEOUT_MS);
   }
 
   interrupt(): void {
@@ -543,6 +564,8 @@ class PythonWorker implements vscode.Disposable {
     const pending = this.pending.get(response.id);
     if (!pending) return;
     if (response.type === "progress") {
+      clearTimeout(pending.timer);
+      pending.timer = this.createInactivityTimer(response.id);
       const progress = workerProgress(response.progress);
       if (progress) pending.onProgress?.(progress);
       return;
@@ -892,7 +915,7 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
     const result = await this.runSelectedPython(
       notebook,
       ["-m", "pip", "install", "--upgrade", ...requirements],
-      { token, timeoutMs: EXECUTION_TIMEOUT_MS, outputLimit: 16 * 1024 * 1024 },
+      { token, timeoutMs: PACKAGE_INSTALL_TIMEOUT_MS, outputLimit: 16 * 1024 * 1024 },
     );
     if (result.exitCode !== 0) {
       throw new Error(cleanProcessDetail(result.stderr) || cleanProcessDetail(result.stdout) || "pip 安装失败。");
@@ -930,6 +953,7 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
             ? this.wholeCellCommand(
               combineManimCellSources(this.manimFragmentsThrough(cell), false),
               this.settingsProvider(),
+              readManimCellSceneClass(cell.metadata),
               readManimCellSettings(cell.metadata),
             )
             : cell.document.getText();
@@ -1043,13 +1067,14 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
   private sceneCommand(
     source: string,
     settings: ManimNotebookSettings,
+    sceneClass: ManimSceneClass,
     interactive: boolean,
     outputOptions: ManimCellSettings = DEFAULT_CELL_SETTINGS,
     capturePartialMovies = false,
   ): { code: string; sceneName: string } {
     const bodySource = canonicalManimCellSource(source);
     if (!isManimCellSource(bodySource)) throw new Error("This Manim Cell does not define an object or animation.");
-    const sceneName = sceneNameForBody(bodySource);
+    const sceneName = sceneNameForBody(`${sceneClass}\n${bodySource}`);
     const body = bodySource.split(/\r?\n/).map((line) => line.trim() ? `        ${line}` : "").join("\n");
     // Judge animation presence per fragment (split at next_slide boundaries)
     // instead of on the whole merged source, so a pure-object Cell keeps its
@@ -1159,7 +1184,7 @@ _MANIM_JUPYTER_CELL_SETTINGS[${JSON.stringify(sceneName)}] = _manim_jupyter_json
 _MANIM_JUPYTER_ACTIVE_CELL_SETTINGS = _manim_jupyter_json.loads(${JSON.stringify(JSON.stringify(outputOptions))})
 _MANIM_JUPYTER_PPTX_PARTIALS = []
 _MANIM_JUPYTER_PPTX_RESOLUTION = None
-class ${sceneName}(Scene):
+class ${sceneName}(${sceneClass}):
 ${slideBehavior}
 ${captureRender}
 
@@ -1181,21 +1206,24 @@ globals().pop(${JSON.stringify(sceneName)}, None)`;
   private wholeCellCommand(
     source: string,
     settings: ManimNotebookSettings,
+    sceneClass: ManimSceneClass,
     outputOptions: ManimCellSettings = DEFAULT_CELL_SETTINGS,
   ): string {
-    return this.sceneCommand(source, settings, false, outputOptions).code;
+    return this.sceneCommand(source, settings, sceneClass, false, outputOptions).code;
   }
 
   private manimFragmentsThrough(
     cell: vscode.NotebookCell,
     currentSource = cell.document.getText(),
   ): ManimCellFragment[] {
-    return cell.notebook.getCells(new vscode.NotebookRange(0, cell.index + 1))
+    const fragments = cell.notebook.getCells(new vscode.NotebookRange(0, cell.index + 1))
       .filter((candidate) => isManimCellMetadata(candidate.metadata))
       .map((candidate) => ({
         source: candidate.index === cell.index ? currentSource : candidate.document.getText(),
         settings: readManimCellSettings(candidate.metadata),
+        sceneClass: readManimCellSceneClass(candidate.metadata),
       }));
+    return groupManimSceneSegments(fragments).at(-1)?.fragments ?? [];
   }
 
   private notebookManimFragments(notebook: vscode.NotebookDocument): ManimCellFragment[] {
@@ -1204,6 +1232,7 @@ globals().pop(${JSON.stringify(sceneName)}, None)`;
       .map((cell) => ({
         source: cell.document.getText(),
         settings: readManimCellSettings(cell.metadata),
+        sceneClass: readManimCellSceneClass(cell.metadata),
       }));
   }
 
@@ -1299,19 +1328,29 @@ _MANIM_JUPYTER_BOOTSTRAP["videoLoop"] = ${JSON.stringify(settings.videoLoop)}`;
     if (!await this.ensureRuntime(notebook, settings, this.cellSettingsProvider(notebook))) {
       throw new Error("请先从 Notebook 右上角选择 Python 环境。");
     }
-    const fragments = this.notebookManimFragments(notebook);
-    // PowerPoint gets one page per non-Wait play.
-    const source = combineManimCellSources(fragments, false);
-    const command = this.sceneCommand(source, settings, false, fragments[0]?.settings, true);
-    const code = `${command.code}
-if not _MANIM_JUPYTER_PPTX_PARTIALS:
+    const segments = groupManimSceneSegments(this.notebookManimFragments(notebook));
+    if (!segments.length) throw new Error("没有可导出的 Manim Cell。");
+    const commands = segments.map((segment) => this.sceneCommand(
+      combineManimCellSources(segment.fragments, false),
+      settings,
+      segment.sceneClass,
+      false,
+      segment.fragments[0]?.settings,
+      true,
+    ));
+    const renderedSegments = commands.map((command) => `${command.code}
+_MANIM_JUPYTER_PPTX_ALL_PARTIALS.extend(_MANIM_JUPYTER_PPTX_PARTIALS)`).join("\n");
+    const code = `# <manim-jupyter-wrapped>
+_MANIM_JUPYTER_PPTX_ALL_PARTIALS = []
+${renderedSegments}
+if not _MANIM_JUPYTER_PPTX_ALL_PARTIALS:
     raise RuntimeError("没有可导出的 Manim 动画；请至少使用一次非 Wait 的 self.play(...)。")
 _ManimJupyterBuildPptx(
-    _MANIM_JUPYTER_PPTX_PARTIALS,
+    _MANIM_JUPYTER_PPTX_ALL_PARTIALS,
     ${JSON.stringify(destination)},
     loop=False,
 )
-del _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
+del _MANIM_JUPYTER_PPTX_ALL_PARTIALS, _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
     const outputs = await this.executeCode(notebook, code, false, onProgress, token);
     const error = outputs.flatMap((output) => output.items)
       .find((item) => item.mime === "application/vnd.code.notebook.error");
@@ -1359,7 +1398,7 @@ del _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
 
   private async convertToHtmlSlides(
     notebook: vscode.NotebookDocument,
-    sceneName: string,
+    sceneNames: readonly string[],
     destination: string,
     folder: string,
     token?: vscode.CancellationToken,
@@ -1373,7 +1412,7 @@ del _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
 from pathlib import Path as _ManimJupyterPath
 from manim_slides.convert import RevealJS as _ManimJupyterRevealJS
 from manim_slides.present import get_scenes_presentation_config as _ManimJupyterPresentationConfigs
-_manim_jupyter_configs = _ManimJupyterPresentationConfigs([${JSON.stringify(sceneName)}], _ManimJupyterPath(${JSON.stringify(folder)}))
+_manim_jupyter_configs = _ManimJupyterPresentationConfigs(${JSON.stringify(sceneNames)}, _ManimJupyterPath(${JSON.stringify(folder)}))
 _ManimJupyterRevealJS(
     presentation_configs=_manim_jupyter_configs,
     one_file=False,
@@ -1407,15 +1446,17 @@ del _manim_jupyter_configs`;
 
   async openHtmlPresentation(
     notebook: vscode.NotebookDocument,
-    sceneName: string,
+    sceneNames: readonly string[],
     token?: vscode.CancellationToken,
     onProgress?: ManimRenderProgressListener,
   ): Promise<string> {
-    if (!sceneName) throw new Error("没有可放映的 Manim Scene。");
+    if (!sceneNames.length) throw new Error("没有可放映的 Manim Scene。");
     if (!await this.ensureRuntime(notebook, this.settingsProvider(), this.cellSettingsProvider(notebook))) {
       throw new Error("请先从 Notebook 右上角选择 Python 环境。");
     }
-    await this.validatePresentationScene(notebook, sceneName);
+    for (const sceneName of sceneNames) {
+      await this.validatePresentationScene(notebook, sceneName);
+    }
     const folder = path.join(path.dirname(notebook.uri.fsPath), "slides");
     const basename = path.basename(notebook.uri.fsPath)
       .replace(/\.manim\.ipynb$/i, "")
@@ -1423,7 +1464,7 @@ del _manim_jupyter_configs`;
     const destination = path.join(folder, `${basename}.slides.html`);
     await this.convertToHtmlSlides(
       notebook,
-      sceneName,
+      sceneNames,
       destination,
       folder,
       token,
@@ -1504,7 +1545,12 @@ del _manim_jupyter_configs`;
       const cumulativeSource = combineManimCellSources(this.manimFragmentsThrough(cell), false);
       const outputs = await this.executeCode(
         cell.notebook,
-        this.wholeCellCommand(cumulativeSource, settings, readManimCellSettings(cell.metadata)),
+        this.wholeCellCommand(
+          cumulativeSource,
+          settings,
+          readManimCellSceneClass(cell.metadata),
+          readManimCellSettings(cell.metadata),
+        ),
         false,
         (value) => report("rendering", formatManimRenderProgress(value)),
         token,
@@ -1520,17 +1566,23 @@ del _manim_jupyter_configs`;
     notebook: vscode.NotebookDocument,
     token?: vscode.CancellationToken,
     onProgress?: ManimRenderProgressListener,
-  ): Promise<string> {
+  ): Promise<string[]> {
     const settings = this.settingsProvider();
     if (!await this.ensureRuntime(notebook, settings, this.cellSettingsProvider(notebook))) {
       throw new Error("请先从 Notebook 右上角选择 Python 环境。");
     }
-    const fragments = this.notebookManimFragments(notebook);
-    const source = combineManimCellSources(fragments, true);
-    const command = this.sceneCommand(source, settings, true, fragments[0]?.settings);
+    const segments = groupManimSceneSegments(this.notebookManimFragments(notebook));
+    if (!segments.length) throw new Error("没有可放映的 Manim Cell。");
+    const commands = segments.map((segment) => this.sceneCommand(
+      combineManimCellSources(segment.fragments, true),
+      settings,
+      segment.sceneClass,
+      true,
+      segment.fragments[0]?.settings,
+    ));
     const outputs = await this.executeCode(
       notebook,
-      command.code,
+      commands.map((command) => command.code).join("\n"),
       false,
       onProgress,
       token,
@@ -1538,8 +1590,10 @@ del _manim_jupyter_configs`;
     const error = outputs.flatMap((output) => output.items)
       .find((item) => item.mime === "application/vnd.code.notebook.error");
     if (error) throw outputError(error);
-    await this.validatePresentationScene(notebook, command.sceneName);
-    return command.sceneName;
+    for (const command of commands) {
+      await this.validatePresentationScene(notebook, command.sceneName);
+    }
+    return commands.map((command) => command.sceneName);
   }
 
   async renderLine(
@@ -1588,9 +1642,11 @@ del _manim_jupyter_configs`;
             self.add(_manim_preview_value)
         self.wait(1 / max(float(config.frame_rate), 1))`
       : "";
+    const sceneClass = readManimCellSceneClass(cell.metadata);
+    const previewSceneClass = LINE_PREVIEW_SCENE_CLASSES[sceneClass];
     const code = `# <manim-jupyter-wrapped>
 _MANIM_JUPYTER_ACTIVE_CELL_SETTINGS = _manim_jupyter_json.loads(${JSON.stringify(JSON.stringify(cellSettings))})
-class ${previewName}(_ManimJupyterManimScene):
+class ${previewName}(${previewSceneClass}):
     def construct(self):
         # Slide boundaries are irrelevant to line previews.
         self.next_slide = lambda *args, **kwargs: None

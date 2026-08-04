@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   DEFAULT_CELL_SETTINGS,
+  MANIM_SCENE_CLASSES,
   ManimNotebookSettings,
   animationAtLine,
   buildMagicArguments,
@@ -9,6 +10,7 @@ import {
   canonicalManimCellSource,
   combineManimCellSources,
   countManimAnimations,
+  groupManimSceneSegments,
   isManimCellSource,
   isManimCellMetadata,
   isManimNotebookPath,
@@ -19,6 +21,7 @@ import {
   previewRenderSettings,
   rawManimCellMetadata,
   rawPythonCellMetadata,
+  readManimCellSceneClass,
   readManimCellSettings,
   repairRevealConfig,
   sceneNameForBody,
@@ -65,14 +68,27 @@ test("uses one canonical body-only Manim Cell format", () => {
 });
 
 test("uses one canonical metadata schema for *.manim.ipynb", () => {
+  assert.deepEqual(MANIM_SCENE_CLASSES, [
+    "Scene",
+    "ThreeDScene",
+    "MovingCameraScene",
+    "ZoomedScene",
+    "VectorScene",
+    "LinearTransformationScene",
+    "SpecialThreeDScene",
+  ]);
   assert.equal(DEFAULT_CELL_SETTINGS.autoplay, false);
   const raw = rawManimCellMetadata(DEFAULT_CELL_SETTINGS);
-  assert.deepEqual(raw.manimJupyter, {});
+  assert.deepEqual(raw.manimJupyter, { sceneClass: "Scene" });
   assert.equal("manimJupyterCellType" in raw, false);
   assert.equal("slideshow" in raw, false);
   assert.deepEqual(
-    rawManimCellMetadata({ ...DEFAULT_CELL_SETTINGS, loop: true, playbackRate: 1.5 }).manimJupyter,
-    { loop: true, playbackRate: 1.5 },
+    rawManimCellMetadata({
+      ...DEFAULT_CELL_SETTINGS,
+      loop: true,
+      playbackRate: 1.5,
+    }).manimJupyter,
+    { sceneClass: "Scene", loop: true, playbackRate: 1.5 },
   );
 
   const notebook = notebookManimCellMetadata(
@@ -84,6 +100,12 @@ test("uses one canonical metadata schema for *.manim.ipynb", () => {
   assert.equal(isManimCellMetadata(notebook), true);
   assert.deepEqual(readManimCellSettings(notebook), DEFAULT_CELL_SETTINGS);
   assert.equal(readManimCellSettings({ metadata: {} }).autoplay, false);
+  assert.equal(readManimCellSceneClass(notebook), "Scene");
+  assert.equal(
+    readManimCellSceneClass({ metadata: rawManimCellMetadata(DEFAULT_CELL_SETTINGS, "ThreeDScene") }),
+    "ThreeDScene",
+  );
+  assert.throws(() => readManimCellSceneClass({ metadata: {} }), /sceneClass/);
 
   const python = rawPythonCellMetadata(raw);
   assert.equal(python.manimJupyterCellType, "python");
@@ -209,6 +231,8 @@ test("normalizes conventional adjacent variables without changing Typst built-in
     normalizeTypstMathExpression("integral_a^b f(x) dif x = sqrt(pi)"),
     "integral_a^b f(x) dif x = sqrt(pi)",
   );
+  const matrix = "mat(1, 2, ..., 10; dots.v, dots.v, dots.down, dots.v; 10, 10, ..., 10)";
+  assert.equal(normalizeTypstMathExpression(matrix), matrix);
 });
 
 test("offers offline Typst math completions by aliases", () => {
@@ -267,19 +291,19 @@ test("preview renders stay at the lowest standard and keep the set aspect ratio"
   const preview = previewRenderSettings(settings);
   assert.equal(preview.quality, "l");
   assert.equal(preview.frameRate, 15);
-  assert.equal(preview.pixelWidth, 854);
+  assert.equal(preview.pixelWidth, 426);
   assert.equal(preview.disableCaching, false);
   // A 9:16 portrait preview caps its long edge instead of its width.
   const portrait = previewRenderSettings({ ...settings, aspectRatio: "9:16" });
-  assert.equal(portrait.pixelWidth, Math.round(854 * 9 / 16));
-  // 4K production settings still force the 854×480 preview footprint.
+  assert.equal(portrait.pixelWidth, Math.round(426 * 9 / 16));
+  // 4K production settings still force the 426×240 preview footprint.
   const production = previewRenderSettings({
     ...settings,
     quality: "k",
     pixelWidth: 3840,
     frameRate: 120,
   });
-  assert.equal(production.pixelWidth, 854);
+  assert.equal(production.pixelWidth, 426);
   assert.equal(production.frameRate, 15);
   // Preview renders never disable partial-movie caching.
   assert.equal(production.disableCaching, false);
@@ -289,10 +313,12 @@ test("combines Manim cells in one persistent Scene and inserts only slide bounda
   const first = {
     source: "title = Text('one')\nself.play(Write(title))",
     settings: DEFAULT_CELL_SETTINGS,
+    sceneClass: "Scene" as const,
   };
   const second = {
     source: "self.play(title.animate.to_edge(UP))",
     settings: { ...DEFAULT_CELL_SETTINGS, autoplay: false },
+    sceneClass: "Scene" as const,
   };
   const combined = combineManimCellSources([first, second], true);
   assert.match(combined, /title = Text\('one'\)[\s\S]*self\.next_slide\(\)[\s\S]*title\.animate/);
@@ -315,14 +341,17 @@ test("every slide segment keeps at least one animation and never clears", () => 
   const pureObject = {
     source: "text_1 = Text('I was added with Add!')",
     settings: DEFAULT_CELL_SETTINGS,
+    sceneClass: "Scene" as const,
   };
   const addOnly = {
     source: "square = Square()\nself.add(square)",
     settings: DEFAULT_CELL_SETTINGS,
+    sceneClass: "Scene" as const,
   };
   const animated = {
     source: "self.play(Write(title))",
     settings: DEFAULT_CELL_SETTINGS,
+    sceneClass: "Scene" as const,
   };
   const combined = combineManimCellSources([pureObject, addOnly, animated], true);
   assert.equal((combined.match(/self\.next_slide\(\)/g) ?? []).length, 2);
@@ -333,11 +362,30 @@ test("every slide segment keeps at least one animation and never clears", () => 
   assert.doesNotMatch(wholeCell, /next_slide|self\.wait/);
 
   const userBoundary = combineManimCellSources([
-    { source: "x = Square()\nself.next_slide()", settings: DEFAULT_CELL_SETTINGS },
+    { source: "x = Square()\nself.next_slide()", settings: DEFAULT_CELL_SETTINGS, sceneClass: "Scene" },
     animated,
   ], true);
   assert.match(userBoundary, /self\.wait\(1\.0\)[\s\S]*self\.next_slide\(\)/);
   assert.equal((userBoundary.match(/self\.next_slide\(\)/g) ?? []).length, 1);
+});
+
+test("groups only adjacent Manim Cells with the same Scene class", () => {
+  const fragment = (sceneClass: "Scene" | "ThreeDScene", source: string) => ({
+    sceneClass,
+    source,
+    settings: DEFAULT_CELL_SETTINGS,
+  });
+  const segments = groupManimSceneSegments([
+    fragment("Scene", "a = Dot()"),
+    fragment("Scene", "self.add(a)"),
+    fragment("ThreeDScene", "axes = ThreeDAxes()"),
+    fragment("Scene", "b = Circle()"),
+  ]);
+  assert.deepEqual(segments.map((segment) => [segment.sceneClass, segment.fragments.length]), [
+    ["Scene", 2],
+    ["ThreeDScene", 1],
+    ["Scene", 1],
+  ]);
 });
 
 test("repairs unquoted RevealJS config values emitted by manim-slides", () => {

@@ -58,6 +58,9 @@ test("Typst renderer claims inline and multiline display math synchronously", as
   const markdown = await configuredMarkdown();
   const env = typstCellEnv();
   assert.match(markdown.render("Energy: $E=mc^2$", env), /manim-typst-host pending inline/);
+  const matrix = markdown.render("$mat(a, b; c, d)$", env);
+  assert.match(matrix, /manim-typst-host pending inline/);
+  assert.match(matrix, /data-expression="mat\(a%2C%20b%3B%20c%2C%20d\)"/);
   assert.match(
     markdown.render("$$\nsum_(k=1)^n k\n$$", env),
     /class="manim-typst-host pending display"/,
@@ -131,6 +134,7 @@ test("Typst MathML styles follow the native markdown-style template mechanism", 
   );
   assert.match(source, /classList\.add\("markdown-style"\)/);
   assert.match(source, /inline math\{font-size:1\.06em/);
+  assert.doesNotMatch(source, /inline math\{[^}]*overflow/);
   assert.match(source, /display math\{font-size:min\(1\.5em,5cqw\)/);
   assert.match(source, /justify-content:safe center/);
   assert.match(source, /container-type:inline-size/);

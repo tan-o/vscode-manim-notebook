@@ -138,11 +138,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     <div class="field"><div class="label"><span>前景</span></div><label class="color-control"><input id="foregroundColor" type="color"><span class="color-text" id="foregroundText"></span></label></div>
   </div>
 
-  <div class="field"><div class="label"><span>画幅</span><span class="value" id="resolutionText"></span></div><select id="aspectRatio" class="native-select"><option value="16:9">16:9 · 宽屏</option><option value="4:3">4:3 · 传统演示</option><option value="1:1">1:1 · 方形</option><option value="9:16">9:16 · 竖屏</option></select></div>
-  <div class="field"><div class="label"><span>宽度</span><span class="value" id="pixelWidthText"></span></div><input id="pixelWidth" type="range" min="320" max="3840" step="160"></div>
-  <div class="field"><div class="label"><span>帧率</span><span class="value" id="frameRateText"></span></div><input id="frameRate" type="range" min="1" max="120" step="1"></div>
+  <div class="field"><div class="label"><span>画幅</span></div><select id="aspectRatio" class="native-select"><option value="16:9">16:9 · 宽屏</option><option value="4:3">4:3 · 传统演示</option><option value="1:1">1:1 · 方形</option><option value="9:16">9:16 · 竖屏</option></select></div>
+  <div class="field"><div class="label"><span>清晰度</span><span class="value" id="resolutionText"></span></div><select id="resolution" class="native-select"><option value="240">240p</option><option value="480">480p</option><option value="720">720p · HD</option><option value="1080">1080p · Full HD</option><option value="1440">1440p · 2K</option><option value="2160">2160p · 4K</option></select></div>
+  <div class="field"><div class="label"><span>帧率</span></div><select id="frameRate" class="native-select"><option value="15">15 FPS</option><option value="24">24 FPS</option><option value="30">30 FPS</option><option value="60">60 FPS</option><option value="90">90 FPS</option><option value="120">120 FPS</option></select></div>
   <div class="field"><div class="label"><span>Cell 视频宽度</span><span class="value" id="mediaWidthText"></span></div><input id="mediaWidth" type="range" min="25" max="100" step="5"></div>
-  <div class="field"><div class="label"><span>质量预设</span></div><select id="quality" class="native-select"><option value="l">快速预览 · 480p15</option><option value="m">中等 · 720p30</option><option value="h">高清 · 1080p60</option><option value="p">制作 · 1440p60</option><option value="k">4K · 2160p60</option></select></div>
   <div class="field"><div class="label"><span>渲染器</span></div><select id="renderer" class="native-select"><option value="cairo">Cairo · 默认兼容</option><option value="opengl">OpenGL · GPU</option></select></div>
   <div class="checks">
     <label class="check"><input id="disableCaching" type="checkbox"><span>每次预览禁用缓存</span></label>
@@ -152,18 +151,37 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const el = Object.fromEntries(['quality','renderer','aspectRatio','disableCaching','backgroundColor','foregroundColor','pixelWidth','frameRate','mediaWidth'].map(id => [id, document.getElementById(id)]));
+    const el = Object.fromEntries(['resolution','renderer','aspectRatio','disableCaching','backgroundColor','foregroundColor','frameRate','mediaWidth'].map(id => [id, document.getElementById(id)]));
     const ratios = {'16:9':16/9,'4:3':4/3,'1:1':1,'9:16':9/16};
+    const ratioParts = {'16:9':[16,9],'4:3':[4,3],'1:1':[1,1],'9:16':[9,16]};
+    const resolutionQualities = {240:'l',480:'l',720:'m',1080:'h',1440:'p',2160:'k'};
+    const resolutionPresets = Object.keys(resolutionQualities).map(Number);
     let state = {quality:'m',renderer:'cairo',aspectRatio:'16:9',theme:'dark'};
     let colorTimer;
     function labels() {
       document.getElementById('backgroundText').textContent = el.backgroundColor.value.toUpperCase();
       document.getElementById('foregroundText').textContent = el.foregroundColor.value.toUpperCase();
-      document.getElementById('pixelWidthText').textContent = el.pixelWidth.value + ' px';
-      document.getElementById('frameRateText').textContent = el.frameRate.value + ' FPS';
       document.getElementById('mediaWidthText').textContent = el.mediaWidth.value + '%';
-      document.getElementById('resolutionText').textContent = el.pixelWidth.value + '×' + Math.round(Number(el.pixelWidth.value) / ratios[state.aspectRatio]);
+      const width = Number(state.pixelWidth);
+      document.getElementById('resolutionText').textContent = width + '×' + Math.round(width / ratios[state.aspectRatio]);
       document.querySelectorAll('[data-theme]').forEach(button => button.classList.toggle('active', button.dataset.theme === state.theme));
+    }
+    function presetWidth(shortEdge) {
+      const [ratioWidth, ratioHeight] = ratioParts[state.aspectRatio];
+      const scale = Math.max(1, Math.round(shortEdge / Math.min(ratioWidth, ratioHeight)));
+      return ratioWidth * scale;
+    }
+    function closestResolution(width) {
+      const [ratioWidth, ratioHeight] = ratioParts[state.aspectRatio];
+      const shortEdge = Math.min(ratioWidth, ratioHeight) * width / ratioWidth;
+      return resolutionPresets.reduce((best, value) => Math.abs(value - shortEdge) < Math.abs(best - shortEdge) ? value : best);
+    }
+    function applyResolution() {
+      const resolution = Number(el.resolution.value);
+      const values = {quality:resolutionQualities[resolution],pixelWidth:presetWidth(resolution)};
+      Object.assign(state, values);
+      labels();
+      send(values);
     }
     function send(values) { vscode.postMessage({type:'update', values}); }
     function sendColor(id, value) {
@@ -184,21 +202,31 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       if (event.data.type !== 'state') return;
       state = event.data.values;
       for (const id of Object.keys(el)) {
-        if (id === 'mediaWidth') el[id].value = parseInt(state[id], 10);
+        if (id === 'resolution') el[id].value = String(closestResolution(Number(state.pixelWidth)));
+        else if (id === 'mediaWidth') el[id].value = parseInt(state[id], 10);
         else if (el[id].type === 'checkbox') el[id].checked = Boolean(state[id]);
         else el[id].value = state[id];
       }
       labels();
     });
     document.querySelectorAll('[data-theme]').forEach(button => button.addEventListener('click', () => setTheme(button)));
-    for (const id of ['quality','renderer','aspectRatio']) {
+    el.resolution.addEventListener('change', applyResolution);
+    for (const id of ['renderer']) {
       el[id].addEventListener('change', () => {
         state[id] = el[id].value;
         labels();
         send({[id]:el[id].value});
       });
     }
-    for (const id of ['pixelWidth','frameRate','mediaWidth']) {
+    el.aspectRatio.addEventListener('change', () => {
+      state.aspectRatio = el.aspectRatio.value;
+      const resolution = Number(el.resolution.value);
+      const values = {aspectRatio:state.aspectRatio,quality:resolutionQualities[resolution],pixelWidth:presetWidth(resolution)};
+      Object.assign(state, values);
+      labels();
+      send(values);
+    });
+    for (const id of ['frameRate','mediaWidth']) {
       el[id].addEventListener('input', labels);
       el[id].addEventListener('change', () => {
         let value = id === 'mediaWidth' ? el[id].value + '%' : Number(el[id].value);

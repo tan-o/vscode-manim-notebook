@@ -83,8 +83,25 @@ class _ManimJupyterBoundedVideo(_ManimJupyterOriginalVideo):
 
 _manim_jupyter_ipython_magic.Video = _ManimJupyterBoundedVideo
 
-_ManimJupyterManimScene = Scene
-_ManimJupyterManimThreeDScene = ThreeDScene
+_ManimJupyterManimScene = globals().get("_ManimJupyterManimScene", Scene)
+_ManimJupyterManimThreeDScene = globals().get(
+    "_ManimJupyterManimThreeDScene", ThreeDScene
+)
+_ManimJupyterManimMovingCameraScene = globals().get(
+    "_ManimJupyterManimMovingCameraScene", MovingCameraScene
+)
+_ManimJupyterManimZoomedScene = globals().get(
+    "_ManimJupyterManimZoomedScene", ZoomedScene
+)
+_ManimJupyterManimVectorScene = globals().get(
+    "_ManimJupyterManimVectorScene", VectorScene
+)
+_ManimJupyterManimLinearTransformationScene = globals().get(
+    "_ManimJupyterManimLinearTransformationScene", LinearTransformationScene
+)
+_ManimJupyterManimSpecialThreeDScene = globals().get(
+    "_ManimJupyterManimSpecialThreeDScene", SpecialThreeDScene
+)
 
 _MANIM_JUPYTER_PROGRESS_PREFIX = "__MANIM_JUPYTER_PROGRESS__"
 _MANIM_JUPYTER_PPTX_TAIL_HOLD_SECONDS = 0.5
@@ -228,8 +245,120 @@ def _ManimJupyterGetTimeProgression(self, *args, **kwargs):
 
 
 _ManimJupyterManimScene.get_time_progression = _ManimJupyterGetTimeProgression
+
+
+class _ManimJupyterMovingCameraSlide(
+    _ManimJupyterSlide,
+    _ManimJupyterManimMovingCameraScene,
+):
+    pass
+
+
+class _ManimJupyterZoomedSlide(_ManimJupyterSlide, _ManimJupyterManimZoomedScene):
+    pass
+
+
+class _ManimJupyterVectorSlide(_ManimJupyterSlide, _ManimJupyterManimVectorScene):
+    pass
+
+
+class _ManimJupyterLinearTransformationSlide(
+    _ManimJupyterSlide,
+    _ManimJupyterManimLinearTransformationScene,
+):
+    pass
+
+
+class _ManimJupyterSpecialThreeDCompatibility:
+    get_sphere = _ManimJupyterManimSpecialThreeDScene.get_sphere
+    get_default_camera_position = (
+        _ManimJupyterManimSpecialThreeDScene.get_default_camera_position
+    )
+    set_camera_to_default_position = (
+        _ManimJupyterManimSpecialThreeDScene.set_camera_to_default_position
+    )
+
+    def get_axes(self):
+        axes = ThreeDAxes(**self.three_d_axes_config)
+        for axis in axes:
+            if self.cut_axes_at_radius:
+                p0 = axis.get_start()
+                p1 = axis.number_to_point(-1)
+                p2 = axis.number_to_point(1)
+                p3 = axis.get_end()
+                new_pieces = VGroup(Line(p0, p1), Line(p1, p2), Line(p2, p3))
+                for piece in new_pieces:
+                    piece.shade_in_3d = True
+                new_pieces.match_style(axis.pieces)
+                axis.pieces.submobjects = new_pieces.submobjects
+            for tick in axis.get_tick_marks():
+                tick.add(VectorizedPoint(1.5 * tick.get_center()))
+        return axes
+
+    def __init__(
+        self,
+        cut_axes_at_radius=True,
+        camera_config={"should_apply_shading": True, "exponential_projection": True},
+        three_d_axes_config={
+            "num_axis_pieces": 1,
+            "axis_config": {
+                "unit_size": 2,
+                "numbers_with_elongated_ticks": [0, 1, 2],
+                "stroke_width": 2,
+            },
+        },
+        sphere_config={"radius": 2, "resolution": (24, 48)},
+        default_angled_camera_position={
+            "phi": 70 * DEGREES,
+            "theta": -110 * DEGREES,
+        },
+        low_quality_config={
+            "camera_config": {"should_apply_shading": False},
+            "three_d_axes_config": {"num_axis_pieces": 1},
+            "sphere_config": {"resolution": (12, 24)},
+        },
+        **kwargs,
+    ):
+        if int(config.get("pixel_width") or 0) <= 854:
+            camera_config = {**camera_config, **low_quality_config["camera_config"]}
+            three_d_axes_config = {
+                **three_d_axes_config,
+                **low_quality_config["three_d_axes_config"],
+            }
+            sphere_config = {**sphere_config, **low_quality_config["sphere_config"]}
+        self.cut_axes_at_radius = cut_axes_at_radius
+        self.camera_config = camera_config
+        self.three_d_axes_config = three_d_axes_config
+        self.sphere_config = sphere_config
+        self.default_angled_camera_position = default_angled_camera_position
+        self.low_quality_config = low_quality_config
+        super().__init__(**kwargs)
+        for name, value in camera_config.items():
+            if hasattr(self.camera, name):
+                setattr(self.camera, name, value)
+
+
+class _ManimJupyterSpecialThreeDPreview(
+    _ManimJupyterSpecialThreeDCompatibility,
+    _ManimJupyterManimThreeDScene,
+):
+    pass
+
+
+class _ManimJupyterSpecialThreeDSlide(
+    _ManimJupyterSpecialThreeDCompatibility,
+    _ManimJupyterThreeDSlide,
+):
+    pass
+
+
 Scene = _ManimJupyterSlide
 ThreeDScene = _ManimJupyterThreeDSlide
+MovingCameraScene = _ManimJupyterMovingCameraSlide
+ZoomedScene = _ManimJupyterZoomedSlide
+VectorScene = _ManimJupyterVectorSlide
+LinearTransformationScene = _ManimJupyterLinearTransformationSlide
+SpecialThreeDScene = _ManimJupyterSpecialThreeDSlide
 Slide = _ManimJupyterSlide
 ThreeDSlide = _ManimJupyterThreeDSlide
 

@@ -13,8 +13,9 @@
 - 普通 Python Cell 与 Manim Cell 共用同一个真实 IPykernel。先在 Python Cell 中执行得到的变量、函数、类和 import 会保留到内核重启，并可由后续 Manim Cell 直接调用。
 - 环境仍由用户自行选择；插件不会替你选择，也不会改变普通 `.ipynb` 使用的 Microsoft Jupyter Kernel。
 - 点击 VS Code 原生 **Run Cell** 后，Cell 使用原生执行状态和计时；Manim/manim-slides 日志不会进入输出区，完成后只留下最终预览（失败时保留错误）。
+- 每个 Manim Cell 右下角显示自己的 Scene 基类；点击可在 `Scene`、`ThreeDScene`、`MovingCameraScene`、`ZoomedScene`、`VectorScene`、`LinearTransformationScene` 与 `SpecialThreeDScene` 之间独立切换。相同基类的连续 Manim Cell 合并为一个 Scene 段；基类变化时开始新段，不跨类型继承对象或相机状态。
 - Cell、光标预览、HTML Slides 和 PowerPoint 导出共用实时进度协议：渲染阶段显示当前动画的帧数、百分比、FPS、实时倍率、耗时与 ETA；PPT 打包阶段显示准确页数和总体百分比。手动任务使用可取消的 VS Code 原生进度通知，自动光标预览只占用底部状态栏。
-- 当前开发版 `.manim.ipynb` 使用插件自己的紧凑 v5 JSON 结构，不包含旧版格式迁移或向下兼容分支。
+- 当前开发版 `.manim.ipynb` 使用插件自己的紧凑 v6 JSON 结构，每个 Manim Cell 都必须在自身元数据中保存 Scene 基类；不包含旧版格式迁移或向下兼容分支。
 
 只有 `.manim.ipynb` 才识别 Manim Cell、对象预览与 PPT 元数据。普通 `.ipynb` 不进入任何 Manim 代码路径。
 
@@ -32,16 +33,17 @@
 完整验收样例位于 `examples/manim-jupyter-acceptance.manim.ipynb`，覆盖对象静态预览、多行动画、Typst Markdown、普通 Python Cell、自动播放与 PPT 元数据。
 日常上手可直接打开 `examples/demo.manim.ipynb`，里面包含 Typst Markdown、Python 辅助 Cell 和坐标轴、公式、对象移动三类 Manim 动画。
 综合对象与动画图鉴位于 `examples/manim-object-animation-gallery.manim.ipynb`，按章节覆盖常用 2D 图元、布尔运算、文本与 Typst、坐标系、变换、路径、updater、动画编排、图表和 SVG 资源，并说明 3D 场景边界。
+七种 Scene 基类的综合案例位于 `examples/scene-class-examples.manim.ipynb`。它在同一份 Notebook 中为不同 Manim Cell 指定不同基类，并分别演示 2D、普通/特殊 3D、移动相机、局部放大、向量和线性变换。
 
 ## Jupyter HTML Slides 交互放映与 PPTX
 
-Markdown 与普通 Python Cell 永远不会成为演示页。全部 Manim Cell 会按 Notebook 顺序组成同一个 `construct()`，其中启用演示的 Cell 负责开启新页：
+Markdown 与普通 Python Cell 永远不会成为演示页。Manim Cell 按 Notebook 顺序和相邻基类分成一个或多个 `construct()`，其中启用演示的 Cell 负责开启新页：
 
 - Cell 右上角的齿轮按钮设置是否加入 PPT、自动前进、循环播放、播放速度、视频控件和对象/动画预览。
 - Cell 配置入口统一放在右上角齿轮，不再在状态栏或左侧快捷操作里重复放置同一个设置入口。
 - **播放 Jupyter HTML Slides** 会把一个连续的 Manim Slide Scene 转换为 RevealJS HTML，并在 VS Code 内置 Webview 中原生放映（方向键 / 空格翻页，Esc 退出全屏）；打开放映时自动进入无侧边栏的全屏模式，退出全屏或关闭放映页后恢复 VS Code 侧边栏。不会启动 `manim-slides present` 的 Qt 播放器；RevealJS 已内置进插件，离线也能播放，不依赖任何 CDN；放映页右上角可一键转到系统浏览器打开同一份 HTML。
 - Cell 输出和右侧语句预览始终自动播放。Cell 设置里的“自动播放”只控制 HTML Slides 是否在视频结束后自动切到下一页；默认关闭，保持 manim-slides 的默认手动翻页体验。
-- 每个后续且启用演示的 Manim Cell 之前只插入一次 `self.next_slide()`；不会新建 Scene、不会调用 `clear()`，也不会删除前一页的对象。因此下一 Cell 可以继续引用并动画化上一 Cell 创建的 Mobject。
+- 同一 Scene 段中，每个后续且启用演示的 Manim Cell 之前只插入一次 `self.next_slide()`；不会调用 `clear()`，因此下一 Cell 可以继续引用上一 Cell 创建的 Mobject。基类变化时会建立新的 Scene 段，变量、Mobject 和相机状态从该 Cell 重新开始。
 - 只有对象定义（例如 `text_1 = Text(...)`）或只调用了 `self.add(...)` 而没有动画的片段，会自动补一个 `self.wait(1.0)` 定格：既保证每个 Cell 的输出是真正可见可自动播放的视频，也满足 Manim Slides “每页至少一个动画” 的校验，且不会清理任何对象。
 - 用户自己写的 `self.next_slide()` 会保留为真实暂停点，一个 Manim Cell 可以包含多个交互步骤。方向键、空格或点击可前后导航；浏览器进入全屏后可用 `Esc` 退出全屏。
 - **导出 PowerPoint** 使用独立的 Scene 渲染规则并直接读取 Manim 的 `partial_movie_files`：`next_slide()` 与独立的 `wait()` 完全忽略，每个真实 `self.play(...)` 恰好生成一页 PPT。PPT 专用渲染会在同一个动画视频内写入精确终点，并默认定格 0.5 秒，避免 PowerPoint 停在 0.99 一类的倒数第二帧；无需对视频做 FFmpeg/PyAV 切割或二次编码。每页视频切换后自动播放，并用本页视频生成 poster frame。PPTX 导出不再要求 Cell 勾选“一 Cell 一页 PPT”，也不会插入导出代码 Cell 或启动 Qt。
@@ -50,8 +52,8 @@ Markdown 与普通 Python Cell 永远不会成为演示页。全部 Manim Cell �
 
 ## 两种预览
 
-- **Cell 下方输出**：整个 Cell / 整个 Scene 的最终渲染结果。输出中只保存很小的媒体描述，专用 renderer 从 Manim 文件分块载入视频；不再把整段视频转成 Base64 塞进 Python、Notebook 和 Webview 内存。
-- **右侧“当前对象与动画预览”**：对象定义和 `shift`、`to_edge`、`next_to` 等位置调整显示静态末帧；`self.play(...)` / `self.wait(...)` 以及由光标所在辅助函数调用触发的动画，只输出该语句实际触发的一个动画片段。目标之前的代码仍会执行以恢复 Scene 状态，但不会写入预览视频帧；目标完成后立即停止，因此不会从前面 Cell 播放到光标。`for`、`if`、嵌套函数等结构按完整 Cell 执行，不需要为特定 Notebook 编写适配。光标快速移动时只保留最新请求，任何时刻最多执行一个预览渲染。
+- **Cell 下方输出**：当前 Cell 所在的连续同类 Scene 段最终渲染结果。输出中只保存很小的媒体描述，专用 renderer 从 Manim 文件分块载入视频；不再把整段视频转成 Base64 塞进 Python、Notebook 和 Webview 内存。
+- **右侧“当前对象与动画预览”**：对象定义和 `shift`、`to_edge`、`next_to` 等位置调整显示静态末帧；`self.play(...)` / `self.wait(...)` 以及由光标所在辅助函数调用触发的动画，只输出该语句实际触发的一个动画片段。预览只执行当前 Cell 之前、且属于同一连续 Scene 段的代码来恢复状态；遇到不同基类立即截断。目标完成后立即停止，因此不会从无关 Scene 段播放到光标。
 - **右侧上下文帮助按 Cell 类型自动切换**：光标在 Manim Cell 中时，自动解析光标所在 Manim API 的官方 Sphinx 页面（函数签名、参数、说明与示例，带本地缓存与离线回退）；光标在普通 Python Cell 中时，调用 VS Code 的 Python/Pylance 原生 LSP Hover；光标在 Markdown 的 `$...$` 或 Manim Cell 的 `TypstMath("...")` 中时，显示离线 Typst 数学符号与模板候选，且编辑器内同时提供同样的 Typst 自动补全。
 
 单个视频超过 128 MiB 时会停止载入并提示降低质量或缩短 Cell，以防 VS Code 再次耗尽内存。

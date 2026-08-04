@@ -184,6 +184,10 @@ test("quick actions expose configurable video loop separate from PPT loop", asyn
 
 test("Typst exclusively owns dollar math in Manim Markdown", async () => {
   const value = await manifest();
+  const extension = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "extension.ts"),
+    "utf8",
+  );
   const host = await readFile(
     path.resolve(__dirname, "..", "..", "src", "typstMarkdown.ts"),
     "utf8",
@@ -197,6 +201,10 @@ test("Typst exclusively owns dollar math in Manim Markdown", async () => {
   assert.match(renderer, /isTypstMathCell\(state\.env\)/);
   assert.match(renderer, /outputItem\.metadata/);
   assert.match(renderer, /manimJupyterTypst/);
+  assert.match(extension, /initializeAddedNotebookCells/);
+  assert.match(extension, /cell\.kind === vscode\.NotebookCellKind\.Markup/);
+  assert.match(extension, /diskMetadata\.manimJupyterTypst !== true/);
+  assert.match(extension, /metadata: \{ \.\.\.diskMetadata, manimJupyterTypst: true \}/);
   assert.match(renderer, /observedShadowRoots/);
   assert.match(renderer, /classList\.add\("markdown-style"\)/);
   assert.match(renderer, /type:\s*"renderTypst"/);
@@ -222,6 +230,20 @@ test("line preview skips slide boundaries and renders at the lowest standard", a
     "utf8",
   );
   assert.match(runtime, /const previewName = "_ManimLinePreview"/);
+  assert.match(runtime, /const previewSceneClass = LINE_PREVIEW_SCENE_CLASSES\[sceneClass\]/);
+  assert.match(runtime, /class \$\{previewName\}\(\$\{previewSceneClass\}\)/);
+  assert.doesNotMatch(runtime, /class \$\{previewName\}\(\$\{sceneClass\}\)/);
+  for (const sceneClass of [
+    "_ManimJupyterManimScene",
+    "_ManimJupyterManimThreeDScene",
+    "_ManimJupyterManimMovingCameraScene",
+    "_ManimJupyterManimZoomedScene",
+    "_ManimJupyterManimVectorScene",
+    "_ManimJupyterManimLinearTransformationScene",
+    "_ManimJupyterSpecialThreeDPreview",
+  ]) {
+    assert.match(runtime, new RegExp(sceneClass));
+  }
   assert.match(runtime, /self\.next_slide = lambda \*args, \*\*kwargs: None/);
   // The lowest-standard preview settings live in core.previewRenderSettings.
   assert.match(core, /previewRenderSettings/);
@@ -283,7 +305,8 @@ test("Typst MathML rendering never dirties metadata and presentation uses browse
   assert.doesNotMatch(typst, /updateCellMetadata|workspace\.applyEdit|manimJupyterTypstSvgs/);
   assert.match(typst, /createRendererMessaging/);
   assert.match(typst, /--features", "html"/);
-  assert.match(typst, /--format", "html"/);
+  assert.match(typst, /format === "html"/);
+  assert.match(typst, /"--format",\s*format/);
   assert.match(runtime, /from manim_slides\.convert import RevealJS/);
   assert.match(runtime, /convert_to\(_ManimJupyterPath/);
   assert.match(runtime, /vscode\.env\.openExternal/);
@@ -310,7 +333,7 @@ test("opening or selecting a saved Manim notebook performs no normalization edit
     const handler = extension.slice(start, extension.indexOf("}),", start) + 3);
     assert.doesNotMatch(handler, /maintainManimNotebook|prepareManimNotebook|applyEdit/);
   }
-  assert.match(serializer, /canonicalDiskCellMetadata\(record\(cell\.metadata\), kind\)/);
+  assert.match(serializer, /canonicalDiskCellMetadata\(diskMetadata, kind\)/);
 });
 
 test("the extension is standalone from Microsoft Jupyter and uses no proposed API", async () => {
@@ -356,13 +379,17 @@ test("product help and rendering are Typst-only", async () => {
   assert.match(source, /runTypst\(\s*executable/);
 });
 
-test("blank Manim notebooks deserialize to a canonical starter scene", async () => {
+test("strict v6 Manim Cells each own one required Scene class", async () => {
   const source = await readFile(
     path.resolve(__dirname, "..", "..", "src", "notebookSerializer.ts"),
     "utf8",
   );
   assert.match(source, /if \(!source\.trim\(\)\)/);
   assert.match(source, /buildSceneCell\("WelcomeScene"\)/);
+  assert.match(source, /MANIM_NOTEBOOK_SCHEMA_VERSION = 6/);
+  assert.match(source, /rawManimCellMetadata\(DEFAULT_CELL_SETTINGS\)/);
+  assert.match(source, /!isManimSceneClass\(record\(diskMetadata\.manimJupyter\)\.sceneClass\)/);
+  assert.doesNotMatch(source, /raw\.sceneClass|notebook\.metadata.*sceneClass/);
   assert.match(source, /version:\s*MANIM_NOTEBOOK_SCHEMA_VERSION/);
   assert.match(source, /manimJupyterTypst:\s*true/);
 });
@@ -394,7 +421,7 @@ test("the Manim notebook toolbar exposes one-click Manim insertion and presentat
   );
   assert.match(handler, /const toManim = !isManimCell\(cell\)/);
   assert.doesNotMatch(handler, /showQuickPick/);
-  assert.match(extension, /defaultAddedCodeCellsToManim/);
+  assert.match(extension, /initializeAddedNotebookCells/);
   assert.match(extension, /change\.addedCells/);
   assert.match(extension, /manimJupyterCellType === "python"/);
 });
@@ -411,15 +438,63 @@ test("cell configuration has one entry point and no legacy command alias", async
   );
   const commands = value.contributes.commands.map((command) => command.command);
   assert.ok(commands.includes("manimJupyter.configureCell"));
+  assert.ok(commands.includes("manimJupyter.selectSceneClass"));
   assert.ok(!commands.includes("manimJupyter.adaptSlideCell"));
   assert.doesNotMatch(extension, /manimJupyter\.adaptSlideCell/);
   assert.match(extension, /class ManimCellStatusBarProvider/);
   assert.match(extension, /registerNotebookCellStatusBarItemProvider/);
   assert.match(extension, /\$\(symbol-structure\) Manim/);
   assert.match(extension, /onDidChangeCellStatusBarItems/);
-  assert.match(extension, /\$\(loading~spin\) Manim/);
+  assert.match(extension, /\$\(loading~spin\) \$\{sceneClass\}/);
+  assert.match(extension, /command: "manimJupyter\.selectSceneClass"/);
+  assert.match(extension, /相同基类的连续 Manim Cell 会合并为一个 Scene 段/);
+  assert.match(extension, /updateCellMetadata\([\s\S]*picked\.sceneClass/);
   assert.doesNotMatch(extension, /isActiveCell/);
   assert.doesNotMatch(navigation, /配置当前 Cell/);
+});
+
+test("video settings separate aspect ratio, resolution, and frame-rate presets", async () => {
+  const source = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "settingsView.ts"),
+    "utf8",
+  );
+  assert.match(source, /id="aspectRatio"/);
+  assert.match(source, /id="resolution"/);
+  assert.match(source, /<option value="2160">2160p · 4K<\/option>/);
+  assert.match(source, /id="frameRate"/);
+  assert.match(source, /<option value="90">90 FPS<\/option>/);
+  assert.match(source, /resolutionQualities = \{240:'l',480:'l',720:'m',1080:'h',1440:'p',2160:'k'\}/);
+  assert.match(source, /ratioParts = \{'16:9':\[16,9\],'4:3':\[4,3\],'1:1':\[1,1\],'9:16':\[9,16\]\}/);
+  assert.match(source, /return ratioWidth \* scale/);
+  assert.match(source, /pixelWidth:presetWidth\(resolution\)/);
+});
+
+test("all supported Scene bases preserve one continuous Slides scene", async () => {
+  const runtime = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "kernelRuntime.ts"),
+    "utf8",
+  );
+  const startup = await readFile(
+    path.resolve(__dirname, "..", "..", "python", "manim_jupyter_startup.py"),
+    "utf8",
+  );
+  assert.match(runtime, /class \$\{sceneName\}\(\$\{sceneClass\}\)/);
+  assert.match(runtime, /class \$\{previewName\}\(\$\{previewSceneClass\}\)/);
+  for (const sceneClass of [
+    "Scene",
+    "ThreeDScene",
+    "MovingCameraScene",
+    "ZoomedScene",
+    "VectorScene",
+    "LinearTransformationScene",
+    "SpecialThreeDScene",
+  ]) {
+    assert.match(startup, new RegExp(`^${sceneClass} = _ManimJupyter`, "m"));
+  }
+  assert.match(startup, /_ManimJupyterSlide,\s*\n\s*_ManimJupyterManimMovingCameraScene/);
+  assert.match(startup, /class _ManimJupyterSpecialThreeDPreview\(/);
+  assert.match(startup, /class _ManimJupyterSpecialThreeDSlide\(/);
+  assert.match(startup, /globals\(\)\.get\("_ManimJupyterManimScene", Scene\)/);
 });
 
 test("every Manim render streams detailed native VS Code progress", async () => {
@@ -453,6 +528,10 @@ test("every Manim render streams detailed native VS Code progress", async () => 
   assert.match(runtime, /正在准备环境/);
   assert.match(runtime, /正在渲染动画/);
   assert.match(runtime, /formatManimRenderProgress/);
+  assert.match(runtime, /EXECUTION_INACTIVITY_TIMEOUT_MS/);
+  assert.match(runtime, /clearTimeout\(pending\.timer\);[\s\S]*pending\.timer = this\.createInactivityTimer/);
+  assert.match(runtime, /pending\.reject\([\s\S]*this\.interrupt\(\)/);
+  assert.doesNotMatch(runtime, /Kernel execution exceeded 15 minutes/);
   assert.match(runtime, /fps/);
   assert.match(runtime, /realtime/);
   assert.match(runtime, /ETA/);
@@ -460,6 +539,7 @@ test("every Manim render streams detailed native VS Code progress", async () => 
   assert.match(extension, /value\.stage === "packaging"/);
   assert.match(worker, /"type": "progress"/);
   assert.match(worker, /_PROGRESS = "__MANIM_JUPYTER_PROGRESS__"/);
+  assert.match(worker, /except queue\.Empty as error:[\s\S]*_kernel\.interrupt_kernel\(\)/);
   assert.match(startup, /class _ManimJupyterTimeProgression/);
   assert.match(startup, /_ManimJupyterOriginalGetTimeProgression/);
   assert.match(startup, /"stage": "rendering"/);
@@ -494,7 +574,15 @@ test("Typst math in Manim Markdown has local editor completion", async () => {
     "utf8",
   );
   assert.match(service, /registerCompletionItemProvider/);
+  assert.match(service, /onDidChangeTextEditorSelection/);
+  assert.match(service, /scheduleCursorHover/);
+  assert.match(service, /editor\.action\.showHover/);
+  assert.match(service, /runTypst\(executable, source, "svg"\)/);
+  assert.match(service, /data:image\/svg\+xml;base64/);
+  assert.match(service, /#set page\(width: auto,[\s\S]{0,240}\$ \$\{normalizedExpression\} \$/);
+  assert.doesNotMatch(service, /<div[^>]*>\$\{rendered\.mathml\}<\/div>/);
   assert.match(service, /notebookType:\s*MANIM_NOTEBOOK_TYPE/);
+  assert.doesNotMatch(service, /scheme:\s*"vscode-notebook-cell"/);
   assert.match(service, /typstMathWordAtOffset\(source, offset\)/);
   assert.match(service, /new vscode\.SnippetString\(suggestion\.insertText\)/);
 });
@@ -585,11 +673,15 @@ test("PowerPoint export renders each animation through the private worker", asyn
     runtime.indexOf("async exportPowerPoint"),
     runtime.indexOf("async replaceCellOutputs"),
   );
-  assert.match(exportImplementation, /combineManimCellSources\(fragments, false\)/);
-  assert.doesNotMatch(exportImplementation, /combineManimCellSources\(fragments, true\)/);
-  assert.match(exportImplementation, /sceneCommand\(source, settings, false, fragments\[0\]\?\.settings, true\)/);
-  assert.match(exportImplementation, /_MANIM_JUPYTER_PPTX_PARTIALS/);
-  assert.match(exportImplementation, /_ManimJupyterBuildPptx\([\s\S]*_MANIM_JUPYTER_PPTX_PARTIALS/);
+  assert.match(exportImplementation, /groupManimSceneSegments\(this\.notebookManimFragments\(notebook\)\)/);
+  assert.match(exportImplementation, /combineManimCellSources\(segment\.fragments, false\)/);
+  assert.doesNotMatch(exportImplementation, /combineManimCellSources\(segment\.fragments, true\)/);
+  assert.match(
+    exportImplementation,
+    /sceneCommand\([\s\S]*segment\.sceneClass,[\s\S]*false,[\s\S]*segment\.fragments\[0\]\?\.settings,[\s\S]*true/,
+  );
+  assert.match(exportImplementation, /_MANIM_JUPYTER_PPTX_ALL_PARTIALS/);
+  assert.match(exportImplementation, /_ManimJupyterBuildPptx\([\s\S]*_MANIM_JUPYTER_PPTX_ALL_PARTIALS/);
   assert.match(exportImplementation, /_ManimJupyterBuildPptx\(/);
   assert.doesNotMatch(exportImplementation, /manim_slides.*convert/);
   assert.match(startup, /def _ManimJupyterBuildPptx\(/);
@@ -608,7 +700,7 @@ test("PowerPoint export renders each animation through the private worker", asyn
   assert.doesNotMatch(startup, /for condition in xpath\(video_node/);
 });
 
-test("presentation playback renders one continuous scene and opens Jupyter-style HTML slides", async () => {
+test("presentation playback renders adjacent same-class segments and opens one HTML deck", async () => {
   const runtime = await readFile(
     path.resolve(__dirname, "..", "..", "src", "kernelRuntime.ts"),
     "utf8",
@@ -618,8 +710,9 @@ test("presentation playback renders one continuous scene and opens Jupyter-style
     "utf8",
   );
   assert.match(runtime, /async renderPresentation\(/);
-  assert.match(runtime, /const fragments = this\.notebookManimFragments\(notebook\)/);
-  assert.match(runtime, /combineManimCellSources\(fragments, true\)/);
+  assert.match(runtime, /groupManimSceneSegments\(this\.notebookManimFragments\(notebook\)\)/);
+  assert.match(runtime, /combineManimCellSources\(segment\.fragments, true\)/);
+  assert.match(runtime, /commands\.map\(\(command\) => command\.sceneName\)/);
   assert.match(runtime, /async openHtmlPresentation/);
   assert.match(runtime, /from manim_slides\.convert import RevealJS/);
   assert.match(runtime, /get_scenes_presentation_config/);
@@ -658,25 +751,48 @@ test("the private worker can be interrupted and is released when its notebook cl
   assert.match(extension, /kernelRuntime\?\.releaseNotebook\(notebook\)/);
 });
 
-test("the packaged demo notebook contains no machine-local outputs", async () => {
-  const filename = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "examples",
+test("the packaged example notebooks all use clean per-Cell strict-v6 format", async () => {
+  const examples = [
     "demo.manim.ipynb",
-  );
-  const source = await readFile(filename, "utf8");
-  const notebook = JSON.parse(source) as {
-    format?: string;
-    version?: number;
-    cells: Array<{ type: string; execution_count?: number | null; outputs?: unknown[] }>;
-  };
-  assert.equal(notebook.format, "manim-jupyter");
-  assert.equal(notebook.version, 5);
-  assert.doesNotMatch(source, /file:\/\/\/|[A-Z]:\\\\Users\\\\/i);
-  for (const cell of notebook.cells.filter((candidate) => candidate.type === "code")) {
-    assert.equal(cell.execution_count, null);
-    assert.deepEqual(cell.outputs, []);
+    "manim-object-animation-gallery.manim.ipynb",
+    "scene-class-examples.manim.ipynb",
+  ];
+  const combinedClasses = new Set<string>();
+  for (const basename of examples) {
+    const filename = path.resolve(__dirname, "..", "..", "examples", basename);
+    const source = await readFile(filename, "utf8");
+    const notebook = JSON.parse(source) as {
+      format?: string;
+      version?: number;
+      cells: Array<{
+        type: string;
+        execution_count?: number | null;
+        outputs?: unknown[];
+        metadata?: { manimJupyter?: { sceneClass?: string } };
+      }>;
+    };
+    assert.equal(notebook.format, "manim-jupyter", basename);
+    assert.equal(notebook.version, 6, basename);
+    assert.equal("sceneClass" in notebook, false, basename);
+    assert.doesNotMatch(source, /file:\/\/\/|[A-Z]:\\\\Users\\\\/i);
+    for (const cell of notebook.cells.filter((candidate) => candidate.type === "code")) {
+      assert.equal(cell.execution_count, null, basename);
+      assert.deepEqual(cell.outputs, [], basename);
+      if (cell.metadata?.manimJupyter) {
+        assert.ok(cell.metadata.manimJupyter.sceneClass, basename);
+        if (basename === "scene-class-examples.manim.ipynb") {
+          combinedClasses.add(cell.metadata.manimJupyter.sceneClass!);
+        }
+      }
+    }
   }
+  assert.deepEqual([...combinedClasses].sort(), [
+    "LinearTransformationScene",
+    "MovingCameraScene",
+    "Scene",
+    "SpecialThreeDScene",
+    "ThreeDScene",
+    "VectorScene",
+    "ZoomedScene",
+  ]);
 });

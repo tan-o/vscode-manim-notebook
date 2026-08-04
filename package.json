@@ -2,7 +2,7 @@
   "name": "manim-ce-jupyter",
   "displayName": "Manim CE for Jupyter",
   "description": "A standalone *.manim.ipynb studio with a real IPykernel, Manim, Typst, Jupyter-style HTML slides and PPTX export.",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "publisher": "tan-o",
   "author": "tan-o",
   "license": "GPL-3.0-only",
@@ -95,6 +95,12 @@
         "title": "Toggle Python / Manim Cell",
         "category": "Manim Jupyter",
         "icon": "$(arrow-swap)"
+      },
+      {
+        "command": "manimJupyter.selectSceneClass",
+        "title": "Select Manim Scene Base Class",
+        "category": "Manim Jupyter",
+        "icon": "$(symbol-class)"
       },
       {
         "command": "manimJupyter.configureCell",

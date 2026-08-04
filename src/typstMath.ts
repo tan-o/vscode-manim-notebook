@@ -348,8 +348,8 @@ export function normalizeTypstMathExpression(expression: string): string {
     .split(/("(?:\\.|[^"\\])*")/g)
     .map((part, index) => index % 2 === 1
       ? part
-      : part.replace(/[A-Za-z]{2,}/g, (word, offset, source) => {
-          if (source[offset - 1] === "#" || TYPST_MATH_WORDS.has(word)) return word;
+      : part.replace(/[A-Za-z]+(?:\.[A-Za-z]+)+|[A-Za-z]{2,}/g, (word, offset, source) => {
+          if (word.includes(".") || source[offset - 1] === "#" || TYPST_MATH_WORDS.has(word)) return word;
           return [...word].join(" ");
         }))
     .join("");

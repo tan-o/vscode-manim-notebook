@@ -296,7 +296,7 @@ function addStyles() {
   const css = `
     .manim-typst-host{color:inherit;box-sizing:border-box}
     .manim-typst-host.inline{display:inline;margin:0 .12em;max-width:100%}
-    .manim-typst-host.inline math{font-size:1.06em;overflow-x:auto}
+    .manim-typst-host.inline math{font-size:1.06em}
     .manim-typst-host.display{display:flex;justify-content:safe center;align-items:center;width:100%;margin:1.25em 0;padding:.35em 0;overflow-x:auto;overflow-y:hidden;container-type:inline-size}
     .manim-typst-host.display math{font-size:min(1.5em,5cqw)}
     .manim-typst-host.pending{min-height:1.15em}

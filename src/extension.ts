@@ -3,8 +3,10 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   DEFAULT_CELL_SETTINGS,
+  MANIM_SCENE_CLASSES,
   ManimCellSettings,
   ManimNotebookSettings,
+  ManimSceneClass,
   buildSceneCell,
   canonicalManimCellSource,
   isManimCellMetadata,
@@ -12,6 +14,7 @@ import {
   notebookManimCellMetadata,
   notebookPythonCellMetadata,
   rawManimCellMetadata,
+  readManimCellSceneClass,
   readManimCellSettings,
   sceneNameForBody,
 } from "./core";
@@ -44,16 +47,26 @@ import {
 
 const NOTEBOOK_TYPE = MANIM_NOTEBOOK_TYPE;
 const MANIM_NOTEBOOK_SUFFIX = ".manim.ipynb";
-const CELL_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 let companionPanel: CompanionPanel | undefined;
 let kernelRuntime: KernelRuntime | undefined;
 let typstMarkdown: TypstMarkdownService | undefined;
+let manimCellStatusBarProvider: ManimCellStatusBarProvider | undefined;
 const activeNotebookMaintenance = new Map<string, Promise<void>>();
 
 const FEATURE_LABELS: Record<EnvironmentFeature, string> = {
   runtime: "Manim Notebook 运行时",
   presentation: "Jupyter HTML Slides 交互放映",
   powerPoint: "Manim PowerPoint 导出",
+};
+
+const SCENE_CLASS_DETAILS: Record<ManimSceneClass, string> = {
+  Scene: "普通二维场景",
+  ThreeDScene: "三维相机与 3D Mobject",
+  MovingCameraScene: "可移动、缩放的二维相机",
+  ZoomedScene: "带局部放大窗口的二维场景",
+  VectorScene: "向量与坐标空间辅助方法",
+  LinearTransformationScene: "矩阵和线性变换辅助方法",
+  SpecialThreeDScene: "带默认三维相机配置的特殊场景",
 };
 
 function isManimNotebook(notebook: vscode.NotebookDocument | undefined): notebook is vscode.NotebookDocument {
@@ -133,8 +146,11 @@ function settings(): ManimNotebookSettings {
 function metadataWithCellSettings(
   metadata: Record<string, unknown>,
   options: ManimCellSettings,
+  sceneClass: ManimSceneClass = isManimCellMetadata(metadata)
+    ? readManimCellSceneClass(metadata)
+    : "Scene",
 ): Record<string, unknown> {
-  return notebookManimCellMetadata(metadata, options);
+  return notebookManimCellMetadata(metadata, options, sceneClass);
 }
 
 function isManimCell(cell: vscode.NotebookCell): boolean {
@@ -184,20 +200,32 @@ class ManimCellStatusBarProvider implements vscode.NotebookCellStatusBarItemProv
   ): vscode.ProviderResult<vscode.NotebookCellStatusBarItem[]> {
     if (!isManimCell(cell)) return [];
     const state = this.runStates.get(cell.document.uri.toString());
+    const sceneClass = readManimCellSceneClass(cell.metadata);
     const item = new vscode.NotebookCellStatusBarItem(
-      state ? "$(loading~spin) Manim" : "$(symbol-structure) Manim",
+      state ? `$(loading~spin) ${sceneClass}` : `$(symbol-structure) Manim · ${sceneClass}`,
       vscode.NotebookCellStatusBarAlignment.Right,
     );
     item.tooltip = state === "preparing"
       ? "Manim Cell：正在准备渲染环境"
       : state === "rendering"
         ? "Manim Cell：正在渲染动画"
-        : "Manim Cell：运行、预览和 PPT 分页由 Manim Jupyter 插件处理";
+        : `${SCENE_CLASS_DETAILS[sceneClass]}；点击切换当前 Manim Cell 的 Scene 基类`;
     item.accessibilityInformation = {
-      label: state ? "Manim Cell 正在渲染" : "Manim Cell",
+      label: state ? `Manim ${sceneClass} 正在渲染` : `Manim ${sceneClass}`,
     };
+    if (!state) {
+      item.command = {
+        command: "manimJupyter.selectSceneClass",
+        title: "选择 Manim Scene 基类",
+        arguments: [cell],
+      };
+    }
     item.priority = 100;
     return [item];
+  }
+
+  refresh(): void {
+    this.changeEmitter.fire();
   }
 
   dispose(): void {
@@ -220,7 +248,7 @@ function sceneCellSettings(
     }
     const source = canonicalManimCellSource(cell.document.getText());
     if (isManimCell(cell)) {
-      const sceneName = sceneNameForBody(source);
+      const sceneName = sceneNameForBody(`${readManimCellSceneClass(cell.metadata)}\n${source}`);
       result[sceneName] = getCellSettings(cell);
     }
   }
@@ -345,10 +373,15 @@ async function maintainManimNotebook(
   return task;
 }
 
-function sceneCell(value: string): vscode.NotebookCellData {
+function sceneCell(value: string, sceneClass: ManimSceneClass = "Scene"): vscode.NotebookCellData {
   const cell = new vscode.NotebookCellData(vscode.NotebookCellKind.Code, value, "python");
-  cell.metadata = metadataWithCellSettings({}, DEFAULT_CELL_SETTINGS);
+  cell.metadata = metadataWithCellSettings({}, DEFAULT_CELL_SETTINGS, sceneClass);
   return cell;
+}
+
+function inheritedSceneClass(notebook: vscode.NotebookDocument, before: number): ManimSceneClass {
+  const previous = notebook.getCells().slice(0, before).reverse().find(isManimCell);
+  return previous ? readManimCellSceneClass(previous.metadata) : "Scene";
 }
 
 async function replaceNotebookCells(
@@ -402,7 +435,7 @@ async function insertCellOfKind(
     ? cellArgument.index + 1
     : editor.selection.end;
   const cell = kind === "manim"
-    ? sceneCell("")
+    ? sceneCell("", inheritedSceneClass(editor.notebook, anchor))
     : kind === "python"
       ? new vscode.NotebookCellData(vscode.NotebookCellKind.Code, "", "python")
       : new vscode.NotebookCellData(vscode.NotebookCellKind.Markup, "", "markdown");
@@ -422,17 +455,26 @@ async function insertManimCell(cellArgument?: vscode.NotebookCell): Promise<void
   await insertCellOfKind("manim", cellArgument);
 }
 
-async function defaultAddedCodeCellsToManim(
+async function initializeAddedNotebookCells(
   event: vscode.NotebookDocumentChangeEvent,
 ): Promise<void> {
   if (!isManimNotebook(event.notebook)) return;
   const edits: vscode.NotebookEdit[] = [];
   for (const change of event.contentChanges) {
     for (const cell of change.addedCells) {
-      if (cell.kind !== vscode.NotebookCellKind.Code) continue;
       const diskMetadata = cell.metadata.metadata && typeof cell.metadata.metadata === "object"
         ? cell.metadata.metadata as Record<string, unknown>
         : {};
+      if (cell.kind === vscode.NotebookCellKind.Markup) {
+        if (diskMetadata.manimJupyterTypst !== true) {
+          edits.push(vscode.NotebookEdit.updateCellMetadata(cell.index, {
+            ...cell.metadata,
+            metadata: { ...diskMetadata, manimJupyterTypst: true },
+          }));
+        }
+        continue;
+      }
+      if (cell.kind !== vscode.NotebookCellKind.Code) continue;
       if (
         diskMetadata.manimJupyter !== undefined ||
         diskMetadata.manimJupyterCellType === "python"
@@ -441,7 +483,11 @@ async function defaultAddedCodeCellsToManim(
       }
       edits.push(vscode.NotebookEdit.updateCellMetadata(
         cell.index,
-        metadataWithCellSettings(cell.metadata, DEFAULT_CELL_SETTINGS),
+        metadataWithCellSettings(
+          cell.metadata,
+          DEFAULT_CELL_SETTINGS,
+          inheritedSceneClass(event.notebook, cell.index),
+        ),
       ));
     }
   }
@@ -459,7 +505,11 @@ async function changeCodeCellType(cellArgument?: vscode.NotebookCell): Promise<v
   }
   const toManim = !isManimCell(cell);
   const metadata = toManim
-    ? metadataWithCellSettings(cell.metadata, getCellSettings(cell))
+    ? metadataWithCellSettings(
+      cell.metadata,
+      getCellSettings(cell),
+      inheritedSceneClass(cell.notebook, cell.index),
+    )
     : notebookPythonCellMetadata(cell.metadata);
   const edit = new vscode.WorkspaceEdit();
   edit.set(cell.notebook.uri, [vscode.NotebookEdit.updateCellMetadata(cell.index, metadata)]);
@@ -588,7 +638,6 @@ async function executeCell(cell: vscode.NotebookCell): Promise<vscode.NotebookCe
   const cellIndex = cell.index;
   const previousKey = executionKey(cell.executionSummary);
   let settled = false;
-  let timer: NodeJS.Timeout | undefined;
   let subscription: vscode.Disposable | undefined;
 
   const completion = new Promise<vscode.NotebookCell>((resolve, reject) => {
@@ -613,11 +662,6 @@ async function executeCell(cell: vscode.NotebookCell): Promise<vscode.NotebookCe
       const changed = event.cellChanges.find((change) => change.cell.index === cellIndex);
       if (changed?.executionSummary) inspect(changed.cell);
     });
-    timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(`Cell ${cellIndex + 1} 渲染超过 15 分钟，已停止等待。`));
-    }, CELL_EXECUTION_TIMEOUT_MS);
   });
 
   try {
@@ -639,7 +683,6 @@ async function executeCell(cell: vscode.NotebookCell): Promise<vscode.NotebookCe
     }
     return await completion;
   } finally {
-    if (timer) clearTimeout(timer);
     subscription?.dispose();
   }
 }
@@ -745,6 +788,46 @@ async function syncActiveNotebookSceneCells(): Promise<void> {
   if (ready) {
     await kernelRuntime?.syncRuntime(notebook, settings(), sceneCellSettings(notebook));
   }
+}
+
+async function selectSceneClass(cellArgument?: vscode.NotebookCell): Promise<void> {
+  const cell = cellArgument ?? activeCell();
+  if (!cell || !isManimCell(cell)) {
+    void vscode.window.showWarningMessage("请选择一个 Manim Cell。");
+    return;
+  }
+  const current = readManimCellSceneClass(cell.metadata);
+  type SceneClassChoice = vscode.QuickPickItem & { sceneClass: ManimSceneClass };
+  const picked = await vscode.window.showQuickPick<SceneClassChoice>(
+    MANIM_SCENE_CLASSES.map((sceneClass) => ({
+      sceneClass,
+      label: `${sceneClass === current ? "$(check)" : "$(circle-large-outline)"} ${sceneClass}`,
+      description: SCENE_CLASS_DETAILS[sceneClass],
+    })),
+    {
+      title: `Manim Cell ${cell.index + 1} · Scene 基类`,
+      placeHolder: "相同基类的连续 Manim Cell 会合并为一个 Scene 段",
+    },
+  );
+  if (!picked || picked.sceneClass === current) return;
+
+  const edit = new vscode.WorkspaceEdit();
+  edit.set(cell.notebook.uri, [
+    vscode.NotebookEdit.updateCellMetadata(
+      cell.index,
+      metadataWithCellSettings(cell.metadata, getCellSettings(cell), picked.sceneClass),
+    ),
+  ]);
+  if (!await vscode.workspace.applyEdit(edit)) {
+    void vscode.window.showErrorMessage("无法更改 Manim Scene 基类。");
+    return;
+  }
+  manimCellStatusBarProvider?.refresh();
+  companionPanel?.refresh(true);
+  vscode.window.setStatusBarMessage(
+    `Manim Cell ${cell.index + 1} 已切换为 ${picked.sceneClass}；重新运行后生效`,
+    3_000,
+  );
 }
 
 async function configureCell(cellArgument?: vscode.NotebookCell): Promise<void> {
@@ -956,14 +1039,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const detail = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`Unable to register *.manim.ipynb editor: ${detail}`);
   });
-  const manimCellStatusBarProvider = new ManimCellStatusBarProvider();
+  manimCellStatusBarProvider = new ManimCellStatusBarProvider();
   kernelRuntime = new KernelRuntime(
     vscode.Uri.joinPath(context.extensionUri, "python", "manim_jupyter_startup.py"),
     vscode.Uri.joinPath(context.extensionUri, "python", "manim_kernel_worker.py"),
     NOTEBOOK_TYPE,
     settings,
     sceneCellSettings,
-    (cell, state) => manimCellStatusBarProvider.setRunState(cell, state),
+    (cell, state) => manimCellStatusBarProvider?.setRunState(cell, state),
   );
   companionPanel = new CompanionPanel(
     context.extensionUri,
@@ -1006,12 +1089,20 @@ export function activate(context: vscode.ExtensionContext): void {
       candidate.getCells().some((cell) => cell.document.uri.toString() === document.uri.toString()),
     );
     if (!notebook) return;
-    const cell = notebook.getCells().find(
+  const cell = notebook.getCells().find(
       (candidate) => candidate.document.uri.toString() === document.uri.toString(),
     );
-    if (!cell || !isManimCell(cell)) {
+    if (!cell) {
       return;
     }
+    if (cell.kind === vscode.NotebookCellKind.Markup) {
+      const diskMetadata = cell.metadata.metadata && typeof cell.metadata.metadata === "object"
+        ? cell.metadata.metadata as Record<string, unknown>
+        : {};
+      if (diskMetadata.manimJupyterTypst !== true) void maintainManimNotebook(notebook);
+      return;
+    }
+    if (!isManimCell(cell)) return;
     const key = document.uri.toString();
     const existing = cellSyncTimers.get(key);
     if (existing) clearTimeout(existing);
@@ -1054,6 +1145,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("manimJupyter.insertCell", insertCell),
     vscode.commands.registerCommand("manimJupyter.insertManimCell", insertManimCell),
     vscode.commands.registerCommand("manimJupyter.changeCodeCellType", changeCodeCellType),
+    vscode.commands.registerCommand("manimJupyter.selectSceneClass", selectSceneClass),
     vscode.commands.registerCommand("manimJupyter.configureCell", configureCell),
     vscode.commands.registerCommand("manimJupyter.exportPptx", exportPptx),
     vscode.commands.registerCommand("manimJupyter.playPresentation", playPresentation),
@@ -1085,7 +1177,7 @@ export function activate(context: vscode.ExtensionContext): void {
       kernelRuntime?.releaseNotebook(notebook);
     }),
     vscode.workspace.onDidChangeNotebookDocument((event) => {
-      void defaultAddedCodeCellsToManim(event);
+      void initializeAddedNotebookCells(event);
     }),
     vscode.window.onDidChangeActiveNotebookEditor(() => {
       updateActiveCellContext();

@@ -15,6 +15,32 @@ export interface ManimNotebookSettings {
   videoLoop: boolean;
 }
 
+export const MANIM_SCENE_CLASSES = [
+  "Scene",
+  "ThreeDScene",
+  "MovingCameraScene",
+  "ZoomedScene",
+  "VectorScene",
+  "LinearTransformationScene",
+  "SpecialThreeDScene",
+] as const;
+
+export type ManimSceneClass = typeof MANIM_SCENE_CLASSES[number];
+
+export function isManimSceneClass(value: unknown): value is ManimSceneClass {
+  return MANIM_SCENE_CLASSES.includes(value as ManimSceneClass);
+}
+
+export function readManimCellSceneClass(
+  metadata: Record<string, unknown>,
+): ManimSceneClass {
+  const value = record(record(metadata.metadata).manimJupyter).sceneClass;
+  if (!isManimSceneClass(value)) {
+    throw new Error("The Manim Cell does not define a valid sceneClass.");
+  }
+  return value;
+}
+
 export interface ManimCellSettings {
   ppt: boolean;
   autoplay: boolean;
@@ -53,8 +79,9 @@ function rawSettings(value: unknown): Partial<ManimCellSettings> {
 
 export function rawManimCellMetadata(
   options: ManimCellSettings,
+  sceneClass: ManimSceneClass = "Scene",
 ): Record<string, unknown> {
-  const manimJupyter: Record<string, unknown> = {};
+  const manimJupyter: Record<string, unknown> = { sceneClass };
   const keys: Array<keyof ManimCellSettings> = [
     "ppt",
     "autoplay",
@@ -80,11 +107,12 @@ export function rawManimCellMetadata(
 export function notebookManimCellMetadata(
   metadata: Record<string, unknown>,
   options: ManimCellSettings,
+  sceneClass: ManimSceneClass = "Scene",
 ): Record<string, unknown> {
   const next = cloneRecord(metadata);
   next.metadata = {
     ...cloneRecord(next.metadata),
-    ...rawManimCellMetadata(options),
+    ...rawManimCellMetadata(options, sceneClass),
   };
   delete next.custom;
   delete next.manimJupyter;
@@ -143,18 +171,16 @@ const ASPECT_RATIOS: Record<ManimNotebookSettings["aspectRatio"], number> = {
   "9:16": 9 / 16,
 };
 
-/** Longest edge of a companion preview frame, matching Manim's ``-ql`` preset
- * (854×480). Portrait scenes cap their long edge instead, so every aspect
- * stays near 410k pixels instead of growing to e.g. 854×1518 for 9:16. */
-export const PREVIEW_MAX_DIMENSION = 854;
+/** Longest edge of a companion preview frame. */
+export const PREVIEW_MAX_DIMENSION = 426;
 
 /** Preview frame rate, matching Manim's ``-ql`` preset (15 fps). Rendering
  * fewer frames is the cheapest single lever on Cairo rasterization time. */
 export const PREVIEW_FRAME_RATE = 15;
 
 /**
- * Lowest-standard settings for companion previews: always ``-ql`` resolution
- * and 15 fps no matter what the notebook settings request, with partial-movie
+ * Fast settings for companion previews: approximately 240p at 15 fps no
+ * matter what the notebook settings request, with partial-movie
  * caching kept on so repeated previews of the same Cell stay fast. The preview
  * is displayed stretched to the configured aspect ratio afterwards, so the
  * resolution here only trades speed against pixel density, never the layout.
@@ -164,9 +190,7 @@ export function previewRenderSettings(settings: ManimNotebookSettings): ManimNot
   return {
     ...settings,
     quality: "l",
-    // Long edge ≤ 854: landscape caps the width (854×480), portrait caps the
-    // height (480×854 for 9:16). Always near 410k pixels regardless of the
-    // configured resolution — the preview is stretched at display time.
+    // Landscape 16:9 renders at 426×240; portrait caps the long edge instead.
     pixelWidth: Math.min(
       settings.pixelWidth,
       Math.round(PREVIEW_MAX_DIMENSION * Math.min(1, aspect)),
@@ -208,6 +232,27 @@ export function canonicalManimCellSource(source: string): string {
 export interface ManimCellFragment {
   source: string;
   settings: ManimCellSettings;
+  sceneClass: ManimSceneClass;
+}
+
+export interface ManimSceneSegment {
+  sceneClass: ManimSceneClass;
+  fragments: ManimCellFragment[];
+}
+
+export function groupManimSceneSegments(
+  fragments: readonly ManimCellFragment[],
+): ManimSceneSegment[] {
+  const segments: ManimSceneSegment[] = [];
+  for (const fragment of fragments) {
+    const current = segments.at(-1);
+    if (!current || current.sceneClass !== fragment.sceneClass) {
+      segments.push({ sceneClass: fragment.sceneClass, fragments: [fragment] });
+    } else {
+      current.fragments.push(fragment);
+    }
+  }
+  return segments;
 }
 
 function endsWithSlideBreak(source: string): boolean {

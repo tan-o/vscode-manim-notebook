@@ -31,6 +31,7 @@ _protocol_stdout = sys.stdout
 _requests: queue.Queue[dict[str, Any] | None] = queue.Queue()
 _shutdown = threading.Event()
 _kernel: KernelManager | None = None
+_KERNEL_INACTIVITY_TIMEOUT_SECONDS = 15 * 60
 
 
 def _send(payload: dict[str, Any]) -> None:
@@ -87,7 +88,16 @@ def _execute(request: dict[str, Any], client: Any) -> dict[str, Any]:
     )
 
     while True:
-        message = client.get_iopub_msg(timeout=900)
+        try:
+            message = client.get_iopub_msg(
+                timeout=_KERNEL_INACTIVITY_TIMEOUT_SECONDS
+            )
+        except queue.Empty as error:
+            if _kernel is not None:
+                _kernel.interrupt_kernel()
+            raise TimeoutError(
+                "Kernel 连续 15 分钟没有输出或进度，已中断执行。"
+            ) from error
         if message.get("parent_header", {}).get("msg_id") != message_id:
             continue
         message_type = message.get("header", {}).get("msg_type")

@@ -2,12 +2,13 @@ import * as vscode from "vscode";
 import {
   DEFAULT_CELL_SETTINGS,
   buildSceneCell,
+  isManimSceneClass,
   rawManimCellMetadata,
   rawPythonCellMetadata,
 } from "./core";
 
 export const MANIM_NOTEBOOK_TYPE = "manim-jupyter-notebook";
-export const MANIM_NOTEBOOK_SCHEMA_VERSION = 5;
+export const MANIM_NOTEBOOK_SCHEMA_VERSION = 6;
 const MANIM_VIDEO_MIME = "application/vnd.manim.video+json";
 
 interface RawNotebookCell {
@@ -177,7 +178,15 @@ export class ManimNotebookSerializer implements vscode.NotebookSerializer {
         sourceText(cell.source),
         kind === vscode.NotebookCellKind.Markup ? "markdown" : "python",
       );
-      data.metadata = { metadata: canonicalDiskCellMetadata(record(cell.metadata), kind) };
+      const diskMetadata = record(cell.metadata);
+      if (
+        kind === vscode.NotebookCellKind.Code &&
+        diskMetadata.manimJupyter !== undefined &&
+        !isManimSceneClass(record(diskMetadata.manimJupyter).sceneClass)
+      ) {
+        throw new Error("Invalid Manim Cell sceneClass.");
+      }
+      data.metadata = { metadata: canonicalDiskCellMetadata(diskMetadata, kind) };
       if (kind === vscode.NotebookCellKind.Code) {
         data.executionSummary = typeof cell.execution_count === "number"
           ? { executionOrder: cell.execution_count }
@@ -201,9 +210,15 @@ export class ManimNotebookSerializer implements vscode.NotebookSerializer {
           metadata: { manimJupyterTypst: true },
         };
       }
-      const metadata = diskMetadata.manimJupyter !== undefined
-        ? { manimJupyter: diskMetadata.manimJupyter }
-        : rawPythonCellMetadata(diskMetadata);
+      let metadata: Record<string, unknown>;
+      if (diskMetadata.manimJupyter !== undefined) {
+        if (!isManimSceneClass(record(diskMetadata.manimJupyter).sceneClass)) {
+          throw new Error("Invalid Manim Cell sceneClass.");
+        }
+        metadata = { manimJupyter: diskMetadata.manimJupyter };
+      } else {
+        metadata = rawPythonCellMetadata(diskMetadata);
+      }
       return {
         type: "code",
         execution_count: cell.executionSummary?.executionOrder ?? null,
