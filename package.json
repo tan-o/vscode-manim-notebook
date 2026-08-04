@@ -4,7 +4,7 @@
   "description": "A standalone *.manim.ipynb studio with a real IPykernel, Manim, Typst, Jupyter-style HTML slides and PPTX export.",
   "version": "0.17.0",
   "publisher": "feysen",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "engines": {
     "vscode": "^1.95.0"
   },
