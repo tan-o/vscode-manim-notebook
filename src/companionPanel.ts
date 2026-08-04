@@ -424,7 +424,9 @@ export class CompanionPanel implements vscode.Disposable {
     let progress = "";
     const label = result.kind === "object"
       ? `对象 ${result.objectName ?? "预览"}`
-      : `第 ${(result.animationIndex ?? 0) + 1} 条动画`;
+      : result.animationIndex === undefined
+        ? "当前语句触发的动画"
+        : `第 ${result.animationIndex + 1} 条动画`;
     for (const output of outputs) {
       for (const item of output.items) {
         if (item.mime === "application/vnd.manim.video+json") {

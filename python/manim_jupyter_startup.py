@@ -7,6 +7,8 @@ explicit Manim Cells before execution.
 
 import logging as _manim_jupyter_logging
 import mimetypes as _manim_jupyter_mimetypes
+import json as _manim_jupyter_json_module
+import time as _manim_jupyter_time
 from pathlib import Path as _ManimJupyterPath
 
 from IPython.display import clear_output as _manim_jupyter_clear_output
@@ -21,7 +23,7 @@ _manim_jupyter_options = globals().get("_MANIM_JUPYTER_BOOTSTRAP", {})
 _MANIM_JUPYTER_CELL_SETTINGS = _manim_jupyter_options.get("cellSettings", {})
 _MANIM_JUPYTER_ACTIVE_CELL_SETTINGS = {}
 _MANIM_JUPYTER_MAGIC_ARGS = _manim_jupyter_options.get(
-    "magicArgs", "-ql -v WARNING --progress_bar display {scene}"
+    "magicArgs", "-ql -v WARNING --progress_bar none {scene}"
 )
 MANIM_THEME = _manim_jupyter_options.get("theme", "dark")
 MANIM_FOREGROUND = _manim_jupyter_options.get("foregroundColor", "#F8FAFC")
@@ -31,7 +33,7 @@ config.media_width = _manim_jupyter_options.get("mediaWidth", "100%")
 # turn a video into a base64 HTML string: that multiplies its memory use across
 # the Python kernel, extension host, notebook model, and output webview.
 config.media_embed = False
-config.progress_bar = "display"
+config.progress_bar = "none"
 config.background_color = _manim_jupyter_options.get("backgroundColor", "#0E1117")
 config.frame_width = config.frame_height * float(_manim_jupyter_options.get("aspect", 16 / 9))
 _manim_jupyter_logging.getLogger("manim-slides").setLevel(_manim_jupyter_logging.WARNING)
@@ -83,6 +85,149 @@ _manim_jupyter_ipython_magic.Video = _ManimJupyterBoundedVideo
 
 _ManimJupyterManimScene = Scene
 _ManimJupyterManimThreeDScene = ThreeDScene
+
+_MANIM_JUPYTER_PROGRESS_PREFIX = "__MANIM_JUPYTER_PROGRESS__"
+_MANIM_JUPYTER_PPTX_TAIL_HOLD_SECONDS = 0.5
+_MANIM_JUPYTER_PPTX_CAPTURE_TAIL = False
+
+
+def _ManimJupyterEmitProgress(payload):
+    """Send one compact progress event through IPykernel's IOPub stream."""
+    print(
+        _MANIM_JUPYTER_PROGRESS_PREFIX
+        + _manim_jupyter_json_module.dumps(payload, ensure_ascii=False),
+        flush=True,
+    )
+
+
+class _ManimJupyterTimeProgression:
+    """Wrap Manim's official frame iterator with throttled progress events."""
+
+    def __init__(self, progression, scene, run_time, description):
+        self._progression = progression
+        self._iterator = iter(progression)
+        self._scene = scene
+        self._run_time = max(float(run_time or 0.0), 0.0)
+        self._description = str(description or "").replace("\n", " ")[:160]
+        raw_total = getattr(progression, "total", None)
+        self._tail_frames_remaining = (
+            max(
+                1,
+                int(round(
+                    max(float(config.get("frame_rate") or 0.0), 1.0)
+                    * _MANIM_JUPYTER_PPTX_TAIL_HOLD_SECONDS
+                )),
+            )
+            if bool(globals().get("_MANIM_JUPYTER_PPTX_CAPTURE_TAIL", False))
+            and self._run_time > 0
+            else 0
+        )
+        self._total = (
+            int(raw_total) + self._tail_frames_remaining
+            if isinstance(raw_total, (int, float)) and raw_total > 0
+            else None
+        )
+        self._current = 0
+        self._pending_frame = False
+        self._started = _manim_jupyter_time.perf_counter()
+        self._last_emit = 0.0
+        self._finished = False
+        try:
+            self._progression.disable = True
+        except BaseException:
+            pass
+        self._emit(force=True)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self._finish_pending_frame()
+        try:
+            value = next(self._iterator)
+        except StopIteration:
+            if self._tail_frames_remaining > 0:
+                self._tail_frames_remaining -= 1
+                self._pending_frame = True
+                return self._run_time
+            self._emit(force=True, done=True)
+            raise
+        self._pending_frame = True
+        return value
+
+    def _finish_pending_frame(self):
+        if not self._pending_frame:
+            return
+        self._pending_frame = False
+        self._current += 1
+        self._emit(force=self._total is not None and self._current >= self._total)
+
+    def _emit(self, force=False, done=False):
+        if self._finished:
+            return
+        now = _manim_jupyter_time.perf_counter()
+        if not force and now - self._last_emit < 0.12:
+            return
+        elapsed = max(now - self._started, 1e-9)
+        fps = self._current / elapsed
+        percent = (
+            min(100.0, 100.0 * self._current / self._total)
+            if self._total is not None
+            else None
+        )
+        frame_rate = max(float(config.get("frame_rate") or 0.0), 1e-9)
+        realtime = (self._current / frame_rate) / elapsed
+        eta = (
+            max(0.0, (self._total - self._current) / fps)
+            if self._total is not None and fps > 0
+            else None
+        )
+        _ManimJupyterEmitProgress({
+            "stage": "rendering",
+            "animation": int(getattr(self._scene.renderer, "num_plays", 0)) + 1,
+            "description": self._description,
+            "current": self._current,
+            "total": self._total,
+            "percent": percent,
+            "fps": fps,
+            "realtime": realtime,
+            "elapsed": elapsed,
+            "eta": eta,
+            "skipped": bool(getattr(self._scene.renderer, "skip_animations", False)),
+            "done": bool(done),
+        })
+        self._last_emit = now
+        if done:
+            self._finished = True
+
+    def close(self):
+        self._finish_pending_frame()
+        self._emit(force=True, done=True)
+        return self._progression.close()
+
+    def __getattr__(self, name):
+        return getattr(self._progression, name)
+
+
+_ManimJupyterOriginalGetTimeProgression = globals().get(
+    "_ManimJupyterOriginalGetTimeProgression",
+    _ManimJupyterManimScene.get_time_progression,
+)
+
+
+def _ManimJupyterGetTimeProgression(self, *args, **kwargs):
+    progression = _ManimJupyterOriginalGetTimeProgression(self, *args, **kwargs)
+    run_time = kwargs.get("run_time", args[0] if args else 0.0)
+    description = kwargs.get("description", args[1] if len(args) > 1 else "")
+    return _ManimJupyterTimeProgression(
+        progression,
+        self,
+        run_time,
+        description,
+    )
+
+
+_ManimJupyterManimScene.get_time_progression = _ManimJupyterGetTimeProgression
 Scene = _ManimJupyterSlide
 ThreeDScene = _ManimJupyterThreeDSlide
 Slide = _ManimJupyterSlide
@@ -165,6 +310,16 @@ def _ManimJupyterBuildPptx(video_files, destination, loop=False):
     if not video_files:
         raise ValueError("没有可导出的 Manim 动画；请至少使用一次 self.play(...) 或 self.wait(...)。")
 
+    progress_started = _manim_jupyter_time.perf_counter()
+    total_pages = len(video_files)
+    _ManimJupyterEmitProgress({
+        "stage": "packaging",
+        "current": 0,
+        "total": total_pages,
+        "percent": 0.0,
+        "elapsed": 0.0,
+    })
+
     prs = _ManimJupyterPresentation()
     resolution = globals().get("_MANIM_JUPYTER_PPTX_RESOLUTION")
     if not (
@@ -207,10 +362,34 @@ def _ManimJupyterBuildPptx(video_files, destination, loop=False):
                 mime_type=mime_type,
             )
             _ManimJupyterAutoPlayMedia(movie, loop=loop)
+            elapsed = _manim_jupyter_time.perf_counter() - progress_started
+            _ManimJupyterEmitProgress({
+                "stage": "packaging",
+                "current": index + 1,
+                "total": total_pages,
+                "percent": 100.0 * (index + 1) / total_pages,
+                "elapsed": elapsed,
+                "eta": elapsed / (index + 1) * (total_pages - index - 1),
+            })
 
     destination = _ManimJupyterPath(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    _ManimJupyterEmitProgress({
+        "stage": "saving",
+        "current": 0,
+        "total": 1,
+        "percent": 0.0,
+        "elapsed": _manim_jupyter_time.perf_counter() - progress_started,
+    })
     prs.save(destination)
+    _ManimJupyterEmitProgress({
+        "stage": "saving",
+        "current": 1,
+        "total": 1,
+        "percent": 100.0,
+        "elapsed": _manim_jupyter_time.perf_counter() - progress_started,
+        "done": True,
+    })
 
 
 _MANIM_JUPYTER_READY = True

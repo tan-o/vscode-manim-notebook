@@ -28,7 +28,6 @@ import {
 } from "./environment";
 
 export const MANIM_VIDEO_MIME = "application/vnd.manim.video+json";
-export const MANIM_PROGRESS_MIME = "application/vnd.manim.progress+json";
 const WORKER_PREFIX = "__MANIM_JUPYTER_JSON__";
 const ENVIRONMENT_PREFIX = "__MANIM_JUPYTER_ENVIRONMENT__";
 const EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -51,6 +50,34 @@ export interface LinePreviewResult {
   animationIndex?: number;
   objectName?: string;
 }
+
+export type ManimRenderStage =
+  | "rendering"
+  | "packaging"
+  | "saving"
+  | "converting"
+  | "loading";
+
+export interface ManimRenderProgress {
+  stage: ManimRenderStage;
+  animation?: number;
+  description?: string;
+  current?: number;
+  total?: number;
+  percent?: number;
+  fps?: number;
+  realtime?: number;
+  elapsed?: number;
+  eta?: number;
+  skipped?: boolean;
+  done?: boolean;
+}
+
+export type ManimRenderProgressListener = (value: ManimRenderProgress) => void;
+
+export type ManimCellRunState = "preparing" | "rendering";
+
+type ManimProgressReporter = (state: ManimCellRunState, message: string) => void;
 
 interface PythonEnvironment {
   readonly id: string;
@@ -95,12 +122,14 @@ interface WorkerResponse {
   ok?: unknown;
   outputs?: WorkerOutput[];
   executionOrder?: unknown;
+  progress?: unknown;
 }
 
 interface PendingRequest {
   resolve(response: WorkerResponse): void;
   reject(error: Error): void;
   timer: NodeJS.Timeout;
+  onProgress?: ManimRenderProgressListener;
 }
 
 interface ProcessResult {
@@ -139,6 +168,92 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function workerProgress(value: unknown): ManimRenderProgress | undefined {
+  const payload = record(value);
+  const stage = payload.stage;
+  if (
+    stage !== "rendering" &&
+    stage !== "packaging" &&
+    stage !== "saving" &&
+    stage !== "converting" &&
+    stage !== "loading"
+  ) {
+    return undefined;
+  }
+  return {
+    stage,
+    animation: finiteNumber(payload.animation),
+    description: typeof payload.description === "string" ? payload.description : undefined,
+    current: finiteNumber(payload.current),
+    total: finiteNumber(payload.total),
+    percent: finiteNumber(payload.percent),
+    fps: finiteNumber(payload.fps),
+    realtime: finiteNumber(payload.realtime),
+    elapsed: finiteNumber(payload.elapsed),
+    eta: finiteNumber(payload.eta),
+    skipped: payload.skipped === true,
+    done: payload.done === true,
+  };
+}
+
+function conciseDuration(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || seconds < 0) return undefined;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  return `${minutes}m ${remainder}s`;
+}
+
+export function formatManimRenderProgress(value: ManimRenderProgress): string {
+  const percent = value.percent === undefined
+    ? undefined
+    : `${Math.max(0, Math.min(100, value.percent)).toFixed(0)}%`;
+  const elapsed = conciseDuration(value.elapsed);
+  const eta = conciseDuration(value.eta);
+  if (value.stage === "rendering") {
+    const parts = [
+      value.animation === undefined ? "正在渲染动画" : `动画 ${value.animation}`,
+      value.total !== undefined && value.current !== undefined
+        ? `${Math.round(value.current)}/${Math.round(value.total)} 帧`
+        : value.current !== undefined
+          ? `${Math.round(value.current)} 帧`
+          : undefined,
+      percent,
+      value.fps !== undefined && value.fps > 0 ? `${value.fps.toFixed(1)} fps` : undefined,
+      value.realtime !== undefined && value.realtime > 0
+        ? `${value.realtime.toFixed(2)}× 实时`
+        : undefined,
+      elapsed ? `已用 ${elapsed}` : undefined,
+      eta && !value.done ? `ETA ${eta}` : undefined,
+      value.skipped ? "跳过帧" : undefined,
+    ].filter((part): part is string => Boolean(part));
+    return parts.join(" · ");
+  }
+  if (value.stage === "packaging") {
+    return [
+      value.total !== undefined && value.current !== undefined
+        ? `正在生成 PPT 页面 ${Math.round(value.current)}/${Math.round(value.total)}`
+        : "正在生成 PPT 页面",
+      percent,
+      eta && !value.done ? `ETA ${eta}` : undefined,
+      elapsed ? `已用 ${elapsed}` : undefined,
+    ].filter((part): part is string => Boolean(part)).join(" · ");
+  }
+  if (value.stage === "saving") {
+    return ["正在写入 PowerPoint 文件", percent, elapsed ? `已用 ${elapsed}` : undefined]
+      .filter((part): part is string => Boolean(part)).join(" · ");
+  }
+  if (value.stage === "converting") {
+    return value.description || "正在生成 HTML Slides";
+  }
+  return value.description || "正在载入渲染结果";
 }
 
 function outputText(item: KernelOutputItem): string {
@@ -354,7 +469,11 @@ class PythonWorker implements vscode.Disposable {
     return !this.disposed && this.process.exitCode === null && !this.process.killed;
   }
 
-  async execute(code: string, storeHistory = false): Promise<WorkerResponse> {
+  async execute(
+    code: string,
+    storeHistory = false,
+    onProgress?: ManimRenderProgressListener,
+  ): Promise<WorkerResponse> {
     await this.ready;
     if (!this.isAlive) throw new Error("The selected Jupyter kernel is not running.");
     const id = ++this.nextId;
@@ -363,7 +482,7 @@ class PythonWorker implements vscode.Disposable {
         this.pending.delete(id);
         reject(new Error("Kernel execution exceeded 15 minutes."));
       }, EXECUTION_TIMEOUT_MS);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, onProgress });
     });
     this.process.stdin.write(`${JSON.stringify({ id, code, storeHistory })}\n`, "utf8");
     return response;
@@ -423,6 +542,11 @@ class PythonWorker implements vscode.Disposable {
     if (typeof response.id !== "number") return;
     const pending = this.pending.get(response.id);
     if (!pending) return;
+    if (response.type === "progress") {
+      const progress = workerProgress(response.progress);
+      if (progress) pending.onProgress?.(progress);
+      return;
+    }
     this.pending.delete(response.id);
     clearTimeout(pending.timer);
     pending.resolve(response);
@@ -467,6 +591,11 @@ export class KernelRuntime implements vscode.Disposable {
   private controllerRefresh: Promise<void> | undefined;
   private linePreviewCancellation: vscode.CancellationTokenSource | undefined;
   private executionOrder = 0;
+  private progressOperation = 0;
+  private readonly cellProgressOperations = new Map<
+    string,
+    Map<number, ManimCellRunState>
+  >();
 
   constructor(
     private readonly startupFile: vscode.Uri,
@@ -474,6 +603,10 @@ export class KernelRuntime implements vscode.Disposable {
     private readonly notebookType: string,
     private readonly settingsProvider: () => ManimNotebookSettings,
     private readonly cellSettingsProvider: (notebook: vscode.NotebookDocument) => Record<string, ManimCellSettings>,
+    private readonly cellRunStateChanged: (
+      cell: vscode.NotebookCell,
+      state: ManimCellRunState | undefined,
+    ) => void = () => undefined,
   ) {}
 
   dispose(): void {
@@ -778,31 +911,49 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
       execution.start(Date.now());
       await execution.clearOutput(cell);
       let success = false;
+      const manim = isManimCellMetadata(cell.metadata);
       try {
-        const manim = isManimCellMetadata(cell.metadata);
-        if (manim) {
-          await execution.replaceOutput([this.progress("Starting Manim environment…")], cell);
-          const ready = await this.ensureRuntime(
+        const run = async (
+          report?: ManimProgressReporter,
+          token?: vscode.CancellationToken,
+        ): Promise<void> => {
+          if (manim) {
+            const ready = await this.ensureRuntime(
+              cell.notebook,
+              this.settingsProvider(),
+              this.cellSettingsProvider(cell.notebook),
+            );
+            if (!ready) throw new Error("Select a Python environment from the notebook kernel picker first.");
+            report?.("rendering", "正在渲染动画…");
+          }
+          const code = manim
+            ? this.wholeCellCommand(
+              combineManimCellSources(this.manimFragmentsThrough(cell), false),
+              this.settingsProvider(),
+              readManimCellSettings(cell.metadata),
+            )
+            : cell.document.getText();
+          const outputs = await this.executeCode(
             cell.notebook,
-            this.settingsProvider(),
-            this.cellSettingsProvider(cell.notebook),
+            code,
+            !manim,
+            manim && report
+              ? (value) => report("rendering", formatManimRenderProgress(value))
+              : undefined,
+            token,
           );
-          if (!ready) throw new Error("Select a Python environment from the notebook kernel picker first.");
-          await execution.replaceOutput([this.progress("Rendering Manim…")], cell);
+          const error = outputs.flatMap((output) => output.items)
+            .find((output) => output.mime === "application/vnd.code.notebook.error");
+          const finalOutputs = manim ? this.finalManimOutputs(outputs) : outputs;
+          if (manim) report?.("rendering", "正在载入视频…");
+          await execution.replaceOutput(finalOutputs.map(toNotebookOutput), cell);
+          success = !error;
+        };
+        if (manim) {
+          await this.withManimProgress(cell, "渲染", run);
+        } else {
+          await run();
         }
-        const code = manim
-          ? this.wholeCellCommand(
-            combineManimCellSources(this.manimFragmentsThrough(cell), false),
-            this.settingsProvider(),
-            readManimCellSettings(cell.metadata),
-          )
-          : cell.document.getText();
-        const outputs = await this.executeCode(cell.notebook, code, !manim);
-        const error = outputs.flatMap((output) => output.items)
-          .find((output) => output.mime === "application/vnd.code.notebook.error");
-        const finalOutputs = manim ? this.finalManimOutputs(outputs) : outputs;
-        await execution.replaceOutput(finalOutputs.map(toNotebookOutput), cell);
-        success = !error;
       } catch (error) {
         const value = error instanceof Error ? error : new Error(String(error));
         await execution.replaceOutput([
@@ -814,10 +965,69 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
     }
   }
 
-  private progress(message: string): vscode.NotebookCellOutput {
-    return new vscode.NotebookCellOutput([
-      vscode.NotebookCellOutputItem.json({ kind: "progress", message }, MANIM_PROGRESS_MIME),
-    ]);
+  private async withManimProgress<T>(
+    cell: vscode.NotebookCell,
+    operationLabel: string,
+    task: (
+      report: ManimProgressReporter,
+      token: vscode.CancellationToken,
+    ) => Thenable<T>,
+    initial: { state: ManimCellRunState; message: string } = {
+      state: "preparing",
+      message: "正在准备环境…",
+    },
+    location: vscode.ProgressLocation.Window | vscode.ProgressLocation.Notification =
+      vscode.ProgressLocation.Notification,
+  ): Promise<T> {
+    const operation = ++this.progressOperation;
+    const key = cell.document.uri.toString();
+    return vscode.window.withProgress(
+      {
+        location,
+        title: `Manim ${operationLabel} · Cell ${cell.index + 1}`,
+        cancellable: location === vscode.ProgressLocation.Notification,
+      },
+      async (progress, token) => {
+        const report: ManimProgressReporter = (state, message) => {
+          let operations = this.cellProgressOperations.get(key);
+          if (!operations) {
+            operations = new Map();
+            this.cellProgressOperations.set(key, operations);
+          }
+          operations.set(operation, state);
+          this.publishCellRunState(cell, operations);
+          progress.report({ message });
+        };
+        report(initial.state, initial.message);
+        try {
+          return await task(report, token);
+        } finally {
+          const operations = this.cellProgressOperations.get(key);
+          operations?.delete(operation);
+          if (operations?.size) {
+            this.publishCellRunState(cell, operations);
+          } else {
+            this.cellProgressOperations.delete(key);
+            this.cellRunStateChanged(cell, undefined);
+          }
+        }
+      },
+    );
+  }
+
+  private publishCellRunState(
+    cell: vscode.NotebookCell,
+    operations: ReadonlyMap<number, ManimCellRunState>,
+  ): void {
+    let latestOperation = -1;
+    let latestState: ManimCellRunState | undefined;
+    for (const [operation, state] of operations) {
+      if (operation > latestOperation) {
+        latestOperation = operation;
+        latestState = state;
+      }
+    }
+    this.cellRunStateChanged(cell, latestState);
   }
 
   private finalManimOutputs(outputs: KernelOutput[]): KernelOutput[] {
@@ -910,14 +1120,22 @@ print(${JSON.stringify(ENVIRONMENT_PREFIX)} + _json.dumps(_report, ensure_ascii=
         _manim_jupyter_original_play = self.play
 
         def _manim_jupyter_capture_play(*play_args, **play_kwargs):
+            global _MANIM_JUPYTER_PPTX_CAPTURE_TAIL
             # 一个真实的 self.play(...) 对应一页 PPTX:先渲染,再把新增的
             # partial movie 记入页面。wait(...) 内部也是 play(Wait),跳过,
             # 所以纯停顿不会单独占页。
             _manim_jupyter_before = list(self._partial_movie_files)
-            _manim_jupyter_result = _manim_jupyter_original_play(*play_args, **play_kwargs)
-            if len(play_args) == 1 and isinstance(play_args[0], Wait):
+            _manim_jupyter_is_wait = len(play_args) == 1 and isinstance(play_args[0], Wait)
+            _manim_jupyter_old_capture_tail = _MANIM_JUPYTER_PPTX_CAPTURE_TAIL
+            _MANIM_JUPYTER_PPTX_CAPTURE_TAIL = not _manim_jupyter_is_wait
+            try:
+                _manim_jupyter_result = _manim_jupyter_original_play(*play_args, **play_kwargs)
+            finally:
+                _MANIM_JUPYTER_PPTX_CAPTURE_TAIL = _manim_jupyter_old_capture_tail
+            _manim_jupyter_new_partials = self._partial_movie_files[len(_manim_jupyter_before):]
+            if _manim_jupyter_is_wait:
                 return _manim_jupyter_result
-            for _manim_jupyter_value in self._partial_movie_files[len(_manim_jupyter_before):]:
+            for _manim_jupyter_value in _manim_jupyter_new_partials:
                 if _manim_jupyter_value is None:
                     continue
                 _manim_jupyter_candidate = _ManimJupyterPath(_manim_jupyter_value)
@@ -993,10 +1211,22 @@ globals().pop(${JSON.stringify(sceneName)}, None)`;
     notebook: vscode.NotebookDocument,
     code: string,
     storeHistory = false,
+    onProgress?: ManimRenderProgressListener,
+    token?: vscode.CancellationToken,
   ): Promise<KernelOutput[]> {
     const worker = await this.selectedWorker(notebook);
     if (!worker) throw new Error("Select a Python environment from the notebook kernel picker first.");
-    return workerOutputs(await worker.execute(code.replace(/\r\n/g, "\n"), storeHistory));
+    if (token?.isCancellationRequested) throw new Error("已取消 Manim 渲染。");
+    const cancellation = token?.onCancellationRequested(() => worker.interrupt());
+    try {
+      return workerOutputs(await worker.execute(
+        code.replace(/\r\n/g, "\n"),
+        storeHistory,
+        onProgress,
+      ));
+    } finally {
+      cancellation?.dispose();
+    }
   }
 
   async ensureRuntime(
@@ -1037,7 +1267,7 @@ MANIM_THEME = ${JSON.stringify(settings.theme)}
 MANIM_FOREGROUND = ${JSON.stringify(settings.foregroundColor)}
 config.media_width = ${JSON.stringify(settings.mediaWidth)}
 config.media_embed = False
-config.progress_bar = "display"
+config.progress_bar = "none"
 config.background_color = ${JSON.stringify(settings.backgroundColor)}
 config.frame_width = config.frame_height * ${this.aspect(settings.aspectRatio)}
 _MANIM_JUPYTER_BOOTSTRAP["videoLoop"] = ${JSON.stringify(settings.videoLoop)}`;
@@ -1063,28 +1293,26 @@ _MANIM_JUPYTER_BOOTSTRAP["videoLoop"] = ${JSON.stringify(settings.videoLoop)}`;
     notebook: vscode.NotebookDocument,
     destination: string,
     token?: vscode.CancellationToken,
+    onProgress?: ManimRenderProgressListener,
   ): Promise<void> {
     const settings = this.settingsProvider();
     if (!await this.ensureRuntime(notebook, settings, this.cellSettingsProvider(notebook))) {
       throw new Error("请先从 Notebook 右上角选择 Python 环境。");
     }
     const fragments = this.notebookManimFragments(notebook);
-    // PPTX pages come from Manim partial movies, one per play/wait. Do not
-    // reuse the RevealJS presentation splitter: injecting next_slide() here
-    // would make cell boundaries part of the source that is not relevant to
-    // PowerPoint output.
+    // PowerPoint gets one page per non-Wait play.
     const source = combineManimCellSources(fragments, false);
     const command = this.sceneCommand(source, settings, false, fragments[0]?.settings, true);
     const code = `${command.code}
 if not _MANIM_JUPYTER_PPTX_PARTIALS:
-    raise RuntimeError("没有可导出的 Manim 动画；请至少使用一次 self.play(...) 或 self.wait(...)。")
+    raise RuntimeError("没有可导出的 Manim 动画；请至少使用一次非 Wait 的 self.play(...)。")
 _ManimJupyterBuildPptx(
     _MANIM_JUPYTER_PPTX_PARTIALS,
     ${JSON.stringify(destination)},
     loop=False,
 )
 del _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
-    const outputs = await this.executeCode(notebook, code);
+    const outputs = await this.executeCode(notebook, code, false, onProgress, token);
     const error = outputs.flatMap((output) => output.items)
       .find((item) => item.mime === "application/vnd.code.notebook.error");
     if (error) throw outputError(error);
@@ -1134,6 +1362,8 @@ del _MANIM_JUPYTER_PPTX_PARTIALS, _MANIM_JUPYTER_PPTX_RESOLUTION`;
     sceneName: string,
     destination: string,
     folder: string,
+    token?: vscode.CancellationToken,
+    onProgress?: ManimRenderProgressListener,
   ): Promise<void> {
     // Match the Jupyter slides workflow used by upstream vscode-jupyter: render
     // through the already-selected private kernel, then let manim-slides' own
@@ -1154,15 +1384,32 @@ _ManimJupyterRevealJS(
     transition="none",
 ).convert_to(_ManimJupyterPath(${JSON.stringify(destination)}))
 del _manim_jupyter_configs`;
-    const outputs = await this.executeCode(notebook, code);
+    onProgress?.({
+      stage: "converting",
+      current: 0,
+      total: 1,
+      percent: 0,
+      description: "正在生成 RevealJS HTML Slides…",
+    });
+    const outputs = await this.executeCode(notebook, code, false, onProgress, token);
     const error = outputs.flatMap((output) => output.items)
       .find((item) => item.mime === "application/vnd.code.notebook.error");
     if (error) throw outputError(error);
+    onProgress?.({
+      stage: "converting",
+      current: 1,
+      total: 1,
+      percent: 100,
+      description: "HTML Slides 已生成",
+      done: true,
+    });
   }
 
   async openHtmlPresentation(
     notebook: vscode.NotebookDocument,
     sceneName: string,
+    token?: vscode.CancellationToken,
+    onProgress?: ManimRenderProgressListener,
   ): Promise<string> {
     if (!sceneName) throw new Error("没有可放映的 Manim Scene。");
     if (!await this.ensureRuntime(notebook, this.settingsProvider(), this.cellSettingsProvider(notebook))) {
@@ -1174,7 +1421,15 @@ del _manim_jupyter_configs`;
       .replace(/\.manim\.ipynb$/i, "")
       .replace(/[^A-Za-z0-9_.-]+/g, "-") || "manim-presentation";
     const destination = path.join(folder, `${basename}.slides.html`);
-    await this.convertToHtmlSlides(notebook, sceneName, destination, folder);
+    await this.convertToHtmlSlides(
+      notebook,
+      sceneName,
+      destination,
+      folder,
+      token,
+      onProgress,
+    );
+    onProgress?.({ stage: "loading", description: "正在载入 HTML Slides…" });
     await vscode.workspace.fs.stat(vscode.Uri.file(destination));
     const html = repairRevealConfig(await readFile(destination, "utf8"));
     // Write the repaired presentation back so double-clicking the generated
@@ -1240,22 +1495,32 @@ del _manim_jupyter_configs`;
   }
 
   async renderWholeCell(cell: vscode.NotebookCell): Promise<KernelOutput[]> {
-    const settings = this.settingsProvider();
-    if (!await this.ensureRuntime(cell.notebook, settings, this.cellSettingsProvider(cell.notebook))) {
-      throw new Error("Select a Python environment from the notebook kernel picker first.");
-    }
-    const cumulativeSource = combineManimCellSources(this.manimFragmentsThrough(cell), false);
-    const outputs = await this.executeCode(
-      cell.notebook,
-      this.wholeCellCommand(cumulativeSource, settings, readManimCellSettings(cell.metadata)),
-    );
-    const error = outputs.flatMap((output) => output.items)
-      .find((item) => item.mime === "application/vnd.code.notebook.error");
-    if (error) throw outputError(error);
-    return this.finalManimOutputs(outputs);
+    return this.withManimProgress(cell, "渲染", async (report, token) => {
+      const settings = this.settingsProvider();
+      if (!await this.ensureRuntime(cell.notebook, settings, this.cellSettingsProvider(cell.notebook))) {
+        throw new Error("Select a Python environment from the notebook kernel picker first.");
+      }
+      report("rendering", "正在渲染动画…");
+      const cumulativeSource = combineManimCellSources(this.manimFragmentsThrough(cell), false);
+      const outputs = await this.executeCode(
+        cell.notebook,
+        this.wholeCellCommand(cumulativeSource, settings, readManimCellSettings(cell.metadata)),
+        false,
+        (value) => report("rendering", formatManimRenderProgress(value)),
+        token,
+      );
+      const error = outputs.flatMap((output) => output.items)
+        .find((item) => item.mime === "application/vnd.code.notebook.error");
+      if (error) throw outputError(error);
+      return this.finalManimOutputs(outputs);
+    });
   }
 
-  async renderPresentation(notebook: vscode.NotebookDocument): Promise<string> {
+  async renderPresentation(
+    notebook: vscode.NotebookDocument,
+    token?: vscode.CancellationToken,
+    onProgress?: ManimRenderProgressListener,
+  ): Promise<string> {
     const settings = this.settingsProvider();
     if (!await this.ensureRuntime(notebook, settings, this.cellSettingsProvider(notebook))) {
       throw new Error("请先从 Notebook 右上角选择 Python 环境。");
@@ -1263,7 +1528,13 @@ del _manim_jupyter_configs`;
     const fragments = this.notebookManimFragments(notebook);
     const source = combineManimCellSources(fragments, true);
     const command = this.sceneCommand(source, settings, true, fragments[0]?.settings);
-    const outputs = await this.executeCode(notebook, command.code);
+    const outputs = await this.executeCode(
+      notebook,
+      command.code,
+      false,
+      onProgress,
+      token,
+    );
     const error = outputs.flatMap((output) => output.items)
       .find((item) => item.mime === "application/vnd.code.notebook.error");
     if (error) throw outputError(error);
@@ -1281,49 +1552,28 @@ del _manim_jupyter_configs`;
     if (!cellSettings.linePreview) return undefined;
     const fragments = this.manimFragmentsThrough(cell).filter((fragment) => fragment.source.trim());
     if (!fragments.length) return undefined;
-    // Locate the statement in the current Cell's own source so line numbers
-    // match the editor.  The preview renders ONLY the cursor statement's
-    // animation: the Scene is built exactly as the whole cell (all Mobjects,
-    // function definitions and helper calls run), but every play/wait whose
-    // CALL SITE is not the cursor statement is intercepted at runtime and
-    // turned into a zero-frame `Wait(0)`.  Runtime line inspection catches
-    // plays hidden inside helper functions (e.g. clear_stage's FadeOut) that
-    // no textual rewrite can see — loops and conditions stay correct too.
+    // Runtime call-site matching uses the current Cell's original line numbers.
     const currentFragment = fragments[fragments.length - 1];
-    const cellSource = canonicalManimCellSource(currentFragment.source);
+    const cellSource = currentFragment.source.replace(/\r\n/g, "\n");
     const preview = previewAtLine(cellSource, cursorLine);
     if (!preview || !await this.ensureRuntime(cell.notebook, settings, allCellSettings)) return undefined;
     this.linePreviewCancellation?.cancel();
     this.linePreviewCancellation?.dispose();
     const cancellation = new vscode.CancellationTokenSource();
     this.linePreviewCancellation = cancellation;
-    // Keep one stable preview scene name so Manim can reuse partial-movie
-    // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
-    // Preceding Cells keep their full source (Mobjects, helpers and their
-    // plays run normally — plays outside the cursor statement are zeroed by
-    // the runtime guard below, including plays hidden inside helper calls).
     const precedingSource = combineManimCellSources(preceding, false);
-    // The current Cell's statements up to and including the cursor statement.
-    const currentSource = canonicalManimCellSource(preview.sourceThroughStatement);
-    // The generated Scene body is: preceding Cells, then the cell anchor, then
-    // this Cell.  The anchor is the absolute Python line of the first source
-    // line, so the guard converts an absolute line back to a body-relative
-    // line; the cursor statement's window is `precedingLineCount + cell line`.
-    // Line counts are stable because indentSourceLines preserves every line.
-    const precedingLineCount = precedingSource.split(/\r?\n/).length;
+    const currentSource = (preview.kind === "animation"
+      ? cellSource
+      : preview.sourceThroughStatement).replace(/\r\n/g, "\n");
+    // The anchor is relative to the current Cell, not preceding Cells.
     const body = [
-      ...indentSourceLines(precedingSource, "        ").split(/\r?\n/),
+      ...(precedingSource ? [indentSourceLines(precedingSource, "        ")] : []),
       "        _manim_jupyter_cell_start = _manim_jupyter_inspect.currentframe().f_lineno + 1",
-      ...indentSourceLines(currentSource, "        ").split(/\r?\n/),
-    ].filter((line) => line !== "").join("\n");
-    // Companion previews always render at the lowest standard (long edge
-    // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
-    // stretched to the configured aspect ratio afterwards.
+      indentSourceLines(currentSource, "        "),
+    ].join("\n");
     const previewSettings = previewRenderSettings(settings);
-    // The scene renders exactly the cursor statement's animation; no -n
-    // index arithmetic is involved, so it can never select the wrong one.
     const args = buildMagicArguments(
       previewName,
       previewSettings,
@@ -1342,32 +1592,59 @@ del _manim_jupyter_configs`;
 _MANIM_JUPYTER_ACTIVE_CELL_SETTINGS = _manim_jupyter_json.loads(${JSON.stringify(JSON.stringify(cellSettings))})
 class ${previewName}(_ManimJupyterManimScene):
     def construct(self):
-        # Line preview uses the plain Manim Scene base. Slide boundaries are
-        # presentation metadata, not animations, so they are no-ops here.
+        # Slide boundaries are irrelevant to line previews.
         self.next_slide = lambda *args, **kwargs: None
-        # Runtime interception: any play/wait whose call site (line number in
-        # this Cell, including inside helper functions) is not the cursor
-        # statement becomes a zero-frame Wait(0), so only the cursor
-        # statement's animation ever renders frames. This is the generic
-        # mechanism — it works for loops, conditions and helper functions
-        # that call self.play internally.
+        # Select the cursor call through Manim's animation range.
         _manim_jupyter_original_play = self.play
         _manim_jupyter_original_wait = self.wait
-        # Body-relative window of the cursor statement: preceding Cells occupy
-        # lines [0, precedingLineCount), this Cell starts at that offset.
-        _manim_jupyter_preview_start = ${precedingLineCount + preview.line}
-        _manim_jupyter_preview_end = ${precedingLineCount + preview.endLine}
+        _manim_jupyter_preview_start = ${preview.line}
+        _manim_jupyter_preview_end = ${preview.endLine}
         import inspect as _manim_jupyter_inspect
+        from manim.utils.exceptions import EndSceneEarlyException as _ManimJupyterPreviewComplete
+        _manim_jupyter_cell_start = None
+        _manim_jupyter_preview_filename = _manim_jupyter_inspect.currentframe().f_code.co_filename
+        _manim_jupyter_target_selected = False
+        config["from_animation_number"] = 10 ** 12
+        config["upto_animation_number"] = -1
+        def _manim_jupyter_select_current_animation():
+            nonlocal _manim_jupyter_target_selected
+            if _manim_jupyter_target_selected:
+                return False
+            _manim_jupyter_number = self.renderer.num_plays
+            config["from_animation_number"] = _manim_jupyter_number
+            config["upto_animation_number"] = _manim_jupyter_number
+            _manim_jupyter_target_selected = True
+            return True
+        def _manim_jupyter_is_cursor_call():
+            if _manim_jupyter_cell_start is None:
+                return False
+            # Include animations invoked through helper calls.
+            _manim_jupyter_frame = _manim_jupyter_inspect.currentframe().f_back
+            while _manim_jupyter_frame is not None:
+                if _manim_jupyter_frame.f_code.co_filename == _manim_jupyter_preview_filename:
+                    _manim_jupyter_line = _manim_jupyter_frame.f_lineno - _manim_jupyter_cell_start
+                    if _manim_jupyter_preview_start <= _manim_jupyter_line <= _manim_jupyter_preview_end:
+                        return True
+                _manim_jupyter_frame = _manim_jupyter_frame.f_back
+            return False
         def _manim_jupyter_guarded_play(*args, **kwargs):
-            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno - _manim_jupyter_cell_start
-            if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
-                return _manim_jupyter_original_play(Wait(0))
-            return _manim_jupyter_original_play(*args, **kwargs)
+            _manim_jupyter_target = (
+                _manim_jupyter_is_cursor_call()
+                and _manim_jupyter_select_current_animation()
+            )
+            _manim_jupyter_result = _manim_jupyter_original_play(*args, **kwargs)
+            if _manim_jupyter_target:
+                raise _ManimJupyterPreviewComplete()
+            return _manim_jupyter_result
         def _manim_jupyter_guarded_wait(*args, **kwargs):
-            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno - _manim_jupyter_cell_start
-            if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
-                return _manim_jupyter_original_wait(0)
-            return _manim_jupyter_original_wait(*args, **kwargs)
+            _manim_jupyter_target = (
+                _manim_jupyter_is_cursor_call()
+                and _manim_jupyter_select_current_animation()
+            )
+            _manim_jupyter_result = _manim_jupyter_original_wait(*args, **kwargs)
+            if _manim_jupyter_target:
+                raise _ManimJupyterPreviewComplete()
+            return _manim_jupyter_result
         self.play = _manim_jupyter_guarded_play
         self.wait = _manim_jupyter_guarded_wait
 ${body}${objectFinish}
@@ -1376,7 +1653,19 @@ get_ipython().run_line_magic("manim", ${JSON.stringify(args)})
 globals().pop(${JSON.stringify(previewName)}, None)`;
     try {
       if (cancellation.token.isCancellationRequested) return undefined;
-      const outputs = await this.executeCode(cell.notebook, code);
+      const outputs = await this.withManimProgress(
+        cell,
+        "预览",
+        async (report, token) => this.executeCode(
+          cell.notebook,
+          code,
+          false,
+          (value) => report("rendering", formatManimRenderProgress(value)),
+          token,
+        ),
+        { state: "rendering", message: "正在渲染光标所在动画…" },
+        vscode.ProgressLocation.Window,
+      );
       if (cancellation.token.isCancellationRequested) return undefined;
       return {
         outputs,

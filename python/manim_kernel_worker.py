@@ -26,6 +26,7 @@ from jupyter_client.kernelspec import NoSuchKernel
 
 
 _PROTOCOL = "__MANIM_JUPYTER_JSON__"
+_PROGRESS = "__MANIM_JUPYTER_PROGRESS__"
 _protocol_stdout = sys.stdout
 _requests: queue.Queue[dict[str, Any] | None] = queue.Queue()
 _shutdown = threading.Event()
@@ -107,12 +108,29 @@ def _execute(request: dict[str, Any], client: Any) -> dict[str, Any]:
         output: dict[str, Any] | None = None
         if message_type == "stream":
             stream = "stderr" if content.get("name") == "stderr" else "stdout"
-            output = {
-                "items": [{
-                    "mime": f"application/x.notebook.stream.{stream}",
-                    "value": str(content.get("text", "")),
-                }]
-            }
+            visible: list[str] = []
+            for part in str(content.get("text", "")).splitlines(keepends=True):
+                marker = part.rstrip("\r\n")
+                if marker.startswith(_PROGRESS):
+                    try:
+                        progress = json.loads(marker[len(_PROGRESS):])
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if isinstance(progress, dict):
+                        _send({
+                            "id": request.get("id"),
+                            "type": "progress",
+                            "progress": progress,
+                        })
+                    continue
+                visible.append(part)
+            if visible:
+                output = {
+                    "items": [{
+                        "mime": f"application/x.notebook.stream.{stream}",
+                        "value": "".join(visible),
+                    }]
+                }
         elif message_type in {"display_data", "execute_result", "update_display_data"}:
             data = content.get("data", {})
             items = [

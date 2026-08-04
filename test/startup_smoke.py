@@ -21,6 +21,36 @@ assert namespace["_MANIM_JUPYTER_READY"] is True
 assert namespace["config"].media_embed is False
 assert None not in shell.input_transformers_cleanup
 
+
+class _ProgressRenderer:
+    num_plays = 1
+    skip_animations = False
+
+
+class _ProgressScene:
+    renderer = _ProgressRenderer()
+
+
+original_frame_rate = namespace["config"].frame_rate
+namespace["config"].frame_rate = 2
+namespace["_MANIM_JUPYTER_PPTX_CAPTURE_TAIL"] = True
+held_samples = list(namespace["_ManimJupyterTimeProgression"](
+    [0.0, 0.5],
+    _ProgressScene(),
+    1.0,
+    "held PPT boundary",
+))
+namespace["_MANIM_JUPYTER_PPTX_CAPTURE_TAIL"] = False
+normal_samples = list(namespace["_ManimJupyterTimeProgression"](
+    [0.0, 0.5],
+    _ProgressScene(),
+    1.0,
+    "normal boundary",
+))
+namespace["config"].frame_rate = original_frame_rate
+assert held_samples == [0.0, 0.5, 1.0]
+assert normal_samples == [0.0, 0.5]
+
 if "--render" in sys.argv:
     published = []
     original_publish = shell.display_pub.publish

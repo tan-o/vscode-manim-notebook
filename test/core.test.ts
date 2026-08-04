@@ -125,6 +125,15 @@ self.wait(1)`;
   assert.equal(animationAtLine(source, 0), undefined);
 });
 
+test("keeps editor line numbers when a Manim cell starts with blank lines", () => {
+  const source = "\n\nsquare = Square()\nself.play(Create(square))";
+  const preview = previewAtLine(source, 3);
+  assert.equal(preview?.kind, "animation");
+  assert.equal(preview?.line, 3);
+  assert.equal(preview?.endLine, 3);
+  assert.equal(preview?.sourceThroughStatement, source);
+});
+
 test("locates object definitions and placement statements for still previews", () => {
   const source = `title = TypstMath(r"alpha + beta")
 title.to_edge(UP)
@@ -139,6 +148,16 @@ self.play(Write(title))`;
   });
   assert.equal(previewAtLine(source, 1)?.objectName, "title");
   assert.equal(previewAtLine(source, 2)?.kind, "animation");
+});
+
+test("treats arbitrary helper calls as runtime-resolved animation statements", () => {
+  const source = "square = Square()\nshow_square(self, square)\nfinish_layout()";
+  const helper = previewAtLine(source, 1);
+  assert.equal(helper?.kind, "animation");
+  assert.equal(helper?.animationIndex, undefined);
+  assert.equal(helper?.line, 1);
+  assert.equal(helper?.text, "show_square(self, square)");
+  assert.equal(previewAtLine(source, 2)?.text, "finish_layout()");
 });
 
 test("keeps a multiline TypstMath assignment together on every cursor line", () => {
@@ -238,7 +257,7 @@ test("sanitizes display names into Python class names", () => {
 test("builds whole-cell and one-animation render arguments", () => {
   assert.equal(
     buildMagicArguments("Demo", settings),
-    "-qm -r 1280,720 --fps 30 -v WARNING --progress_bar display --renderer=cairo --disable_caching Demo",
+    "-qm -r 1280,720 --fps 30 -v WARNING --progress_bar none --renderer=cairo --disable_caching Demo",
   );
   assert.match(buildMagicArguments("Demo", settings, "l", 2), /-n 2,2 Demo$/);
   assert.match(buildMagicArguments("Demo", settings, "l", undefined, true), /--save_last_frame Demo$/);

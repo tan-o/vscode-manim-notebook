@@ -13,6 +13,7 @@
 - 普通 Python Cell 与 Manim Cell 共用同一个真实 IPykernel。先在 Python Cell 中执行得到的变量、函数、类和 import 会保留到内核重启，并可由后续 Manim Cell 直接调用。
 - 环境仍由用户自行选择；插件不会替你选择，也不会改变普通 `.ipynb` 使用的 Microsoft Jupyter Kernel。
 - 点击 VS Code 原生 **Run Cell** 后，Cell 使用原生执行状态和计时；Manim/manim-slides 日志不会进入输出区，完成后只留下最终预览（失败时保留错误）。
+- Cell、光标预览、HTML Slides 和 PowerPoint 导出共用实时进度协议：渲染阶段显示当前动画的帧数、百分比、FPS、实时倍率、耗时与 ETA；PPT 打包阶段显示准确页数和总体百分比。手动任务使用可取消的 VS Code 原生进度通知，自动光标预览只占用底部状态栏。
 - 当前开发版 `.manim.ipynb` 使用插件自己的紧凑 v5 JSON 结构，不包含旧版格式迁移或向下兼容分支。
 
 只有 `.manim.ipynb` 才识别 Manim Cell、对象预览与 PPT 元数据。普通 `.ipynb` 不进入任何 Manim 代码路径。
@@ -43,14 +44,14 @@ Markdown 与普通 Python Cell 永远不会成为演示页。全部 Manim Cell �
 - 每个后续且启用演示的 Manim Cell 之前只插入一次 `self.next_slide()`；不会新建 Scene、不会调用 `clear()`，也不会删除前一页的对象。因此下一 Cell 可以继续引用并动画化上一 Cell 创建的 Mobject。
 - 只有对象定义（例如 `text_1 = Text(...)`）或只调用了 `self.add(...)` 而没有动画的片段，会自动补一个 `self.wait(1.0)` 定格：既保证每个 Cell 的输出是真正可见可自动播放的视频，也满足 Manim Slides “每页至少一个动画” 的校验，且不会清理任何对象。
 - 用户自己写的 `self.next_slide()` 会保留为真实暂停点，一个 Manim Cell 可以包含多个交互步骤。方向键、空格或点击可前后导航；浏览器进入全屏后可用 `Esc` 退出全屏。
-- **导出 PowerPoint** 会把整个 Notebook 渲染成一个连续 Scene，然后直接读取 Manim 的 `partial_movie_files`：每个 `self.play(...)` / `self.wait(...)` 独立成为一页 PPT，每页的视频都设置了切换页面后自动播放，并生成视频首帧作为 poster frame。PPTX 导出不会把 Cell 或 `slides_next` 当作分页依据，`next_slide()` 只保留给 HTML 放映使用；只要 Notebook 里有 Manim Cell 就能导出，不再要求 Cell 勾选“一 Cell 一页 PPT”，也不会插入导出代码 Cell 或启动 Qt。
+- **导出 PowerPoint** 使用独立的 Scene 渲染规则并直接读取 Manim 的 `partial_movie_files`：`next_slide()` 与独立的 `wait()` 完全忽略，每个真实 `self.play(...)` 恰好生成一页 PPT。PPT 专用渲染会在同一个动画视频内写入精确终点，并默认定格 0.5 秒，避免 PowerPoint 停在 0.99 一类的倒数第二帧；无需对视频做 FFmpeg/PyAV 切割或二次编码。每页视频切换后自动播放，并用本页视频生成 poster frame。PPTX 导出不再要求 Cell 勾选“一 Cell 一页 PPT”，也不会插入导出代码 Cell 或启动 Qt。
 - HTML 放映由 Manim Slides 生成正向/反向交互片段并交给 RevealJS 导航；普通 Cell 输出仍是独立预览。
 
 
 ## 两种预览
 
 - **Cell 下方输出**：整个 Cell / 整个 Scene 的最终渲染结果。输出中只保存很小的媒体描述，专用 renderer 从 Manim 文件分块载入视频；不再把整段视频转成 Base64 塞进 Python、Notebook 和 Webview 内存。
-- **右侧“当前对象与动画预览”**：对象定义和 `shift`、`to_edge`、`next_to` 等位置调整显示静态末帧；`self.play(...)` / `self.wait(...)` 只播放光标所在的动画区间。光标快速移动时只保留最新请求，任何时刻最多执行一个预览渲染。
+- **右侧“当前对象与动画预览”**：对象定义和 `shift`、`to_edge`、`next_to` 等位置调整显示静态末帧；`self.play(...)` / `self.wait(...)` 以及由光标所在辅助函数调用触发的动画，只输出该语句实际触发的一个动画片段。目标之前的代码仍会执行以恢复 Scene 状态，但不会写入预览视频帧；目标完成后立即停止，因此不会从前面 Cell 播放到光标。`for`、`if`、嵌套函数等结构按完整 Cell 执行，不需要为特定 Notebook 编写适配。光标快速移动时只保留最新请求，任何时刻最多执行一个预览渲染。
 - **右侧上下文帮助按 Cell 类型自动切换**：光标在 Manim Cell 中时，自动解析光标所在 Manim API 的官方 Sphinx 页面（函数签名、参数、说明与示例，带本地缓存与离线回退）；光标在普通 Python Cell 中时，调用 VS Code 的 Python/Pylance 原生 LSP Hover；光标在 Markdown 的 `$...$` 或 Manim Cell 的 `TypstMath("...")` 中时，显示离线 Typst 数学符号与模板候选，且编辑器内同时提供同样的 Typst 自动补全。
 
 单个视频超过 128 MiB 时会停止载入并提示降低质量或缩短 Cell，以防 VS Code 再次耗尽内存。

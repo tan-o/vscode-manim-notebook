@@ -131,7 +131,10 @@ test("Typst MathML styles follow the native markdown-style template mechanism", 
   );
   assert.match(source, /classList\.add\("markdown-style"\)/);
   assert.match(source, /inline math\{font-size:1\.06em/);
-  assert.match(source, /display math\{font-size:2\.2em/);
+  assert.match(source, /display math\{font-size:min\(1\.5em,5cqw\)/);
+  assert.match(source, /justify-content:safe center/);
+  assert.match(source, /container-type:inline-size/);
+  assert.doesNotMatch(source, /fitDisplayFormulas/);
   assert.match(source, /observedShadowRoots/);
   assert.match(source, /outputItem\.metadata/);
   assert.doesNotMatch(source, /getNotebookScope/);

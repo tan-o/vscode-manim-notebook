@@ -160,29 +160,6 @@ export function activate(context) {
   return {
     renderOutputItem(outputItem, element) {
       const payload = outputItem.json();
-      if (payload?.kind === "progress") {
-        const wrapper = document.createElement("div");
-        wrapper.style.padding = "8px 0 10px";
-        const label = document.createElement("div");
-        label.textContent = payload.message || "Rendering Manim…";
-        label.style.marginBottom = "6px";
-        label.style.color = "var(--vscode-descriptionForeground)";
-        const track = document.createElement("div");
-        track.setAttribute("role", "progressbar");
-        track.style.height = "2px";
-        track.style.overflow = "hidden";
-        track.style.background = "var(--vscode-progressBar-background)";
-        track.style.opacity = "0.28";
-        const bar = document.createElement("div");
-        bar.style.width = `${Math.max(4, Math.min(100, Number(payload.percent) || 32))}%`;
-        bar.style.height = "100%";
-        bar.style.background = "var(--vscode-progressBar-background)";
-        bar.style.opacity = "1";
-        track.appendChild(bar);
-        wrapper.append(label, track);
-        element.replaceChildren(wrapper);
-        return;
-      }
       const id = `manim-video-${Date.now().toString(36)}-${nextId++}`;
       const video = document.createElement("video");
       video.style.maxWidth = "100%";

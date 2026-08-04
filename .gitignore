@@ -1,4 +1,7 @@
 node_modules/
+.claude/
+.vscode/
+**/.vscode/
 out/
 dist/
 media/

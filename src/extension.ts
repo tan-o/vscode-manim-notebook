@@ -16,7 +16,12 @@ import {
   sceneNameForBody,
 } from "./core";
 import { CompanionPanel } from "./companionPanel";
-import { KernelRuntime, MANIM_VIDEO_MIME } from "./kernelRuntime";
+import {
+  KernelRuntime,
+  MANIM_VIDEO_MIME,
+  ManimRenderProgressListener,
+  formatManimRenderProgress,
+} from "./kernelRuntime";
 import {
   MANIM_NOTEBOOK_SCHEMA_VERSION,
   MANIM_NOTEBOOK_TYPE,
@@ -136,30 +141,68 @@ function isManimCell(cell: vscode.NotebookCell): boolean {
   return cell.kind === vscode.NotebookCellKind.Code && isManimCellMetadata(cell.metadata);
 }
 
+function nativeRenderProgress(
+  progress: vscode.Progress<{ message?: string; increment?: number }>,
+): ManimRenderProgressListener {
+  let packagingPercent = 0;
+  return (value) => {
+    const message = formatManimRenderProgress(value);
+    if (value.stage === "packaging" && value.percent !== undefined) {
+      const next = Math.max(packagingPercent, Math.min(100, value.percent));
+      const increment = next - packagingPercent;
+      packagingPercent = next;
+      progress.report(increment > 0 ? { message, increment } : { message });
+      return;
+    }
+    progress.report({ message });
+  };
+}
+
 class ManimCellStatusBarProvider implements vscode.NotebookCellStatusBarItemProvider {
+  private readonly changeEmitter = new vscode.EventEmitter<void>();
+  private readonly runStates = new Map<string, "preparing" | "rendering">();
+
+  readonly onDidChangeCellStatusBarItems = this.changeEmitter.event;
+
+  setRunState(
+    cell: vscode.NotebookCell,
+    state: "preparing" | "rendering" | undefined,
+  ): void {
+    const key = cell.document.uri.toString();
+    const previous = this.runStates.get(key);
+    if (state) {
+      this.runStates.set(key, state);
+    } else {
+      this.runStates.delete(key);
+    }
+    if (previous !== state) this.changeEmitter.fire();
+  }
+
   provideCellStatusBarItems(
     cell: vscode.NotebookCell,
     _token: vscode.CancellationToken,
   ): vscode.ProviderResult<vscode.NotebookCellStatusBarItem[]> {
-    // Only the active Manim cell shows the badge; every Manim cell in the
-    // notebook would otherwise render one badge each (e.g. two "Manim" marks
-    // with a two-cell notebook).
-    if (!isManimCell(cell) || !this.isActiveCell(cell)) return [];
+    if (!isManimCell(cell)) return [];
+    const state = this.runStates.get(cell.document.uri.toString());
     const item = new vscode.NotebookCellStatusBarItem(
-      "$(symbol-structure) Manim",
+      state ? "$(loading~spin) Manim" : "$(symbol-structure) Manim",
       vscode.NotebookCellStatusBarAlignment.Right,
     );
-    item.tooltip = "Manim Scene Cell：运行、预览和 PPT 分页由 Manim Jupyter 插件处理";
+    item.tooltip = state === "preparing"
+      ? "Manim Cell：正在准备渲染环境"
+      : state === "rendering"
+        ? "Manim Cell：正在渲染动画"
+        : "Manim Cell：运行、预览和 PPT 分页由 Manim Jupyter 插件处理";
+    item.accessibilityInformation = {
+      label: state ? "Manim Cell 正在渲染" : "Manim Cell",
+    };
     item.priority = 100;
     return [item];
   }
 
-  private isActiveCell(cell: vscode.NotebookCell): boolean {
-    const editor = vscode.window.activeNotebookEditor;
-    if (!editor || editor.notebook.uri.toString() !== cell.notebook.uri.toString()) {
-      return false;
-    }
-    return editor.selection.start === cell.index;
+  dispose(): void {
+    this.runStates.clear();
+    this.changeEmitter.dispose();
   }
 }
 
@@ -805,15 +848,6 @@ async function exportPptx(): Promise<void> {
     return;
   }
   try {
-    const ready = await kernelRuntime?.ensureRuntime(
-      notebook,
-      settings(),
-      sceneCellSettings(notebook),
-    );
-    if (!ready) {
-      void vscode.window.showWarningMessage("请先在 Notebook 右上角选择一个 Python 环境。");
-      return;
-    }
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -822,8 +856,13 @@ async function exportPptx(): Promise<void> {
       },
       async (progress, token) => {
         if (token.isCancellationRequested) throw new Error("已取消 PowerPoint 导出。");
-        progress.report({ message: "逐动画渲染并合成每页视频", increment: 80 });
-        await kernelRuntime!.exportPowerPoint(notebook, destination.fsPath, token);
+        progress.report({ message: "正在准备 Manim 环境…" });
+        await kernelRuntime!.exportPowerPoint(
+          notebook,
+          destination.fsPath,
+          token,
+          nativeRenderProgress(progress),
+        );
       },
     );
     void vscode.window.showInformationMessage(
@@ -854,15 +893,6 @@ async function playPresentation(): Promise<void> {
     return;
   }
   try {
-    const ready = await kernelRuntime?.ensureRuntime(
-      notebook,
-      settings(),
-      sceneCellSettings(notebook),
-    );
-    if (!ready) {
-      void vscode.window.showWarningMessage("请先在 Notebook 右上角选择一个 Python 环境。");
-      return;
-    }
     await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
@@ -871,11 +901,11 @@ async function playPresentation(): Promise<void> {
       },
       async (progress, token) => {
         if (token.isCancellationRequested) throw new Error("已取消播放准备。");
-        progress.report({ message: "连续渲染全部 Manim Cell", increment: 80 });
-        const sceneName = await kernelRuntime!.renderPresentation(notebook);
+        const report = nativeRenderProgress(progress);
+        progress.report({ message: "正在准备 Manim 环境…" });
+        const sceneName = await kernelRuntime!.renderPresentation(notebook, token, report);
         if (token.isCancellationRequested) throw new Error("已取消播放准备。");
-        progress.report({ message: "生成并打开 Jupyter HTML Slides", increment: 20 });
-        await kernelRuntime!.openHtmlPresentation(notebook, sceneName);
+        await kernelRuntime!.openHtmlPresentation(notebook, sceneName, token, report);
       },
     );
   } catch (error) {
@@ -926,12 +956,14 @@ export function activate(context: vscode.ExtensionContext): void {
     const detail = error instanceof Error ? error.message : String(error);
     void vscode.window.showErrorMessage(`Unable to register *.manim.ipynb editor: ${detail}`);
   });
+  const manimCellStatusBarProvider = new ManimCellStatusBarProvider();
   kernelRuntime = new KernelRuntime(
     vscode.Uri.joinPath(context.extensionUri, "python", "manim_jupyter_startup.py"),
     vscode.Uri.joinPath(context.extensionUri, "python", "manim_kernel_worker.py"),
     NOTEBOOK_TYPE,
     settings,
     sceneCellSettings,
+    (cell, state) => manimCellStatusBarProvider.setRunState(cell, state),
   );
   companionPanel = new CompanionPanel(
     context.extensionUri,
@@ -954,7 +986,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const typstView = new TypstPresetsViewProvider(insertTypstPreset);
   const manimCellStatusBar = vscode.notebooks.registerNotebookCellStatusBarItemProvider(
     NOTEBOOK_TYPE,
-    new ManimCellStatusBarProvider(),
+    manimCellStatusBarProvider,
   );
   typstMarkdown = new TypstMarkdownService(
     (notebook) => kernelRuntime?.resolveTypstExecutable(notebook),
@@ -999,6 +1031,7 @@ export function activate(context: vscode.ExtensionContext): void {
     companionPanel,
     typstMarkdown,
     videoRenderer,
+    manimCellStatusBarProvider,
     manimCellStatusBar,
     operationsView,
     vscode.workspace.registerNotebookSerializer(

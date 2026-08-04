@@ -1,6 +1,7 @@
 .gitignore
 .claude/**
 .vscode/**
+**/.vscode/**
 .tmp-*/**
 src/**
 test/**

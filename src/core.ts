@@ -304,7 +304,7 @@ export function buildMagicArguments(
   sceneName: string,
   settings: ManimNotebookSettings,
   quality = settings.quality,
-  animationRange?: number,
+  animationRange?: number | { from: number; to: number },
   saveLastFrame = false,
 ): string {
   const height = Math.round(
@@ -315,14 +315,16 @@ export function buildMagicArguments(
     `-r ${settings.pixelWidth},${height}`,
     `--fps ${settings.frameRate}`,
     "-v WARNING",
-    "--progress_bar display",
+    "--progress_bar none",
     `--renderer=${settings.renderer}`,
   ];
   if (settings.disableCaching) {
     parts.push("--disable_caching");
   }
   if (animationRange !== undefined) {
-    parts.push(`-n ${animationRange},${animationRange}`);
+    const from = typeof animationRange === "number" ? animationRange : animationRange.from;
+    const to = typeof animationRange === "number" ? animationRange : animationRange.to;
+    parts.push(`-n ${from},${to}`);
   }
   if (saveLastFrame) {
     parts.push("--save_last_frame");
@@ -434,6 +436,7 @@ export function previewAtLine(
     };
   }
 
+  let callStatement: PreviewAtLine | undefined;
   for (let line = Math.min(cursorLine, lines.length - 1); line >= 0; line -= 1) {
     const endLine = statementEnd(lines, line);
     if (cursorLine > endLine) {
@@ -445,6 +448,16 @@ export function previewAtLine(
     const selfAdd = /^\s*self\.add\s*\(\s*([A-Za-z_]\w*)/.exec(statement);
     const objectName = assignment?.[1] ?? placement?.[1] ?? selfAdd?.[1];
     if (!objectName) {
+      // Helper calls are resolved from the Python call stack at runtime.
+      if (!callStatement && /^\s*(?:await\s+)?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*\(/.test(statement)) {
+        callStatement = {
+          kind: "animation",
+          line,
+          endLine,
+          text: statement.trim(),
+          sourceThroughStatement: lines.slice(0, endLine + 1).join("\n"),
+        };
+      }
       continue;
     }
     return {
@@ -456,7 +469,7 @@ export function previewAtLine(
       sourceThroughStatement: lines.slice(0, endLine + 1).join("\n"),
     };
   }
-  return undefined;
+  return callStatement;
 }
 
 /** Locate the self.play/self.wait statement containing the cursor line. */

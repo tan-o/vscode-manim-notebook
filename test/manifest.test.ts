@@ -7,10 +7,16 @@ import test from "node:test";
 interface RendererContribution {
   id: string;
   entrypoint: string | { extends: string; path: string };
+  mimeTypes?: string[];
   requiresMessaging?: string;
 }
 
 interface ExtensionManifest {
+  name: string;
+  version: string;
+  publisher: string;
+  author: string;
+  license: string;
   activationEvents: string[];
   extensionDependencies: string[];
   contributes: {
@@ -28,6 +34,30 @@ interface ExtensionManifest {
     };
   };
 }
+
+test("package identity is consistently owned by tan-o", async () => {
+  const value = await manifest();
+  assert.equal(value.publisher, "tan-o");
+  assert.equal(value.author, "tan-o");
+  assert.equal(value.license, "GPL-3.0-only");
+
+  const lock = JSON.parse(await readFile(
+    path.resolve(__dirname, "..", "..", "package-lock.json"),
+    "utf8",
+  )) as {
+    name: string;
+    version: string;
+    packages: Record<string, { name?: string; version?: string; license?: string }>;
+  };
+  assert.equal(lock.name, value.name);
+  assert.equal(lock.version, value.version);
+  assert.equal(lock.packages[""]?.name, value.name);
+  assert.equal(lock.packages[""]?.version, value.version);
+  assert.equal(lock.packages[""]?.license, value.license);
+
+  const notice = await readFile(path.resolve(__dirname, "..", "..", "NOTICE"), "utf8");
+  assert.match(notice, /Copyright \(C\) 2026 tan-o/);
+});
 
 async function manifest(): Promise<ExtensionManifest> {
   const filename = path.resolve(__dirname, "..", "..", "package.json");
@@ -197,14 +227,17 @@ test("line preview skips slide boundaries and renders at the lowest standard", a
   assert.match(core, /previewRenderSettings/);
   assert.match(core, /disableCaching: false/);
   assert.match(core, /quality: "l"/);
-  // Preview renders only the cursor statement's animation: self.play/self.wait
-  // are wrapped and every call whose runtime line is outside the cursor
-  // statement becomes a zero-frame Wait(0). Runtime line inspection catches
-  // plays inside helper functions (e.g. clear_stage's FadeOut) that textual
-  // rewrites cannot see — generic across loops, conditions and helpers.
   assert.match(runtime, /_manim_jupyter_guarded_play/);
-  assert.match(runtime, /_manim_jupyter_inspect\.currentframe\(\)\.f_back\.f_lineno/);
-  assert.match(runtime, /_manim_jupyter_original_play\(Wait\(0\)\)/);
+  assert.match(runtime, /_manim_jupyter_cell_start = None/);
+  assert.match(runtime, /preview\.kind === "animation"[\s\S]*\? cellSource/);
+  assert.match(runtime, /_manim_jupyter_frame\.f_back/);
+  assert.match(runtime, /f_code\.co_filename == _manim_jupyter_preview_filename/);
+  assert.match(runtime, /self\.renderer\.num_plays/);
+  assert.match(runtime, /config\["from_animation_number"\] = _manim_jupyter_number/);
+  assert.match(runtime, /config\["upto_animation_number"\] = _manim_jupyter_number/);
+  assert.match(runtime, /raise _ManimJupyterPreviewComplete\(\)/);
+  assert.doesNotMatch(runtime, /_manim_jupyter_original_play\(Wait\(0\)\)/);
+  assert.doesNotMatch(runtime, /precedingLineCount \+ preview\.line/);
   assert.doesNotMatch(runtime, /demotePrecedingAnimationsToAdds/);
 });
 
@@ -383,7 +416,59 @@ test("cell configuration has one entry point and no legacy command alias", async
   assert.match(extension, /class ManimCellStatusBarProvider/);
   assert.match(extension, /registerNotebookCellStatusBarItemProvider/);
   assert.match(extension, /\$\(symbol-structure\) Manim/);
+  assert.match(extension, /onDidChangeCellStatusBarItems/);
+  assert.match(extension, /\$\(loading~spin\) Manim/);
+  assert.doesNotMatch(extension, /isActiveCell/);
   assert.doesNotMatch(navigation, /配置当前 Cell/);
+});
+
+test("every Manim render streams detailed native VS Code progress", async () => {
+  const value = await manifest();
+  const runtime = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "kernelRuntime.ts"),
+    "utf8",
+  );
+  const renderer = await readFile(
+    path.resolve(__dirname, "..", "..", "renderer", "manimVideo.js"),
+    "utf8",
+  );
+  const extension = await readFile(
+    path.resolve(__dirname, "..", "..", "src", "extension.ts"),
+    "utf8",
+  );
+  const worker = await readFile(
+    path.resolve(__dirname, "..", "..", "python", "manim_kernel_worker.py"),
+    "utf8",
+  );
+  const startup = await readFile(
+    path.resolve(__dirname, "..", "..", "python", "manim_jupyter_startup.py"),
+    "utf8",
+  );
+  const videoContribution = value.contributes.notebookRenderer.find(
+    (item) => item.id === "manimJupyter.video-renderer",
+  );
+  assert.match(runtime, /vscode\.window\.withProgress/);
+  assert.match(runtime, /vscode\.ProgressLocation\.Window/);
+  assert.match(runtime, /vscode\.ProgressLocation\.Notification/);
+  assert.match(runtime, /正在准备环境/);
+  assert.match(runtime, /正在渲染动画/);
+  assert.match(runtime, /formatManimRenderProgress/);
+  assert.match(runtime, /fps/);
+  assert.match(runtime, /realtime/);
+  assert.match(runtime, /ETA/);
+  assert.match(extension, /nativeRenderProgress/);
+  assert.match(extension, /value\.stage === "packaging"/);
+  assert.match(worker, /"type": "progress"/);
+  assert.match(worker, /_PROGRESS = "__MANIM_JUPYTER_PROGRESS__"/);
+  assert.match(startup, /class _ManimJupyterTimeProgression/);
+  assert.match(startup, /_ManimJupyterOriginalGetTimeProgression/);
+  assert.match(startup, /"stage": "rendering"/);
+  assert.match(startup, /"stage": "packaging"/);
+  assert.match(startup, /"stage": "saving"/);
+  assert.match(startup, /_manim_jupyter_time\.perf_counter/);
+  assert.doesNotMatch(runtime, /MANIM_PROGRESS_MIME/);
+  assert.doesNotMatch(renderer, /kind === "progress"/);
+  assert.deepEqual(videoContribution?.mimeTypes, ["application/vnd.manim.video+json"]);
 });
 
 test("contextual help routes Markdown math to Typst and Python to native hovers", async () => {
@@ -491,7 +576,7 @@ test("PowerPoint export renders each animation through the private worker", asyn
     source.indexOf("async function exportPptx"),
     source.indexOf("async function playPresentation"),
   );
-  assert.match(exportBody, /kernelRuntime!\.exportPowerPoint\(notebook, destination\.fsPath, token\)/);
+  assert.match(exportBody, /kernelRuntime!\.exportPowerPoint\([\s\S]*destination\.fsPath,[\s\S]*token,[\s\S]*nativeRenderProgress\(progress\)/);
   assert.doesNotMatch(exportBody, /kernelRuntime!\.renderPresentation\(notebook\)/);
   assert.doesNotMatch(exportBody, /getCellSettings\(cell\)\.ppt/);
   assert.doesNotMatch(exportBody, /executeCell\(/);
@@ -504,10 +589,16 @@ test("PowerPoint export renders each animation through the private worker", asyn
   assert.doesNotMatch(exportImplementation, /combineManimCellSources\(fragments, true\)/);
   assert.match(exportImplementation, /sceneCommand\(source, settings, false, fragments\[0\]\?\.settings, true\)/);
   assert.match(exportImplementation, /_MANIM_JUPYTER_PPTX_PARTIALS/);
-  assert.match(exportImplementation, /_ManimJupyterBuildPptx/);
+  assert.match(exportImplementation, /_ManimJupyterBuildPptx\([\s\S]*_MANIM_JUPYTER_PPTX_PARTIALS/);
+  assert.match(exportImplementation, /_ManimJupyterBuildPptx\(/);
   assert.doesNotMatch(exportImplementation, /manim_slides.*convert/);
   assert.match(startup, /def _ManimJupyterBuildPptx\(/);
   assert.match(startup, /def _ManimJupyterAutoPlayMedia\(/);
+  assert.match(startup, /_MANIM_JUPYTER_PPTX_TAIL_HOLD_SECONDS = 0\.5/);
+  assert.match(startup, /_MANIM_JUPYTER_PPTX_CAPTURE_TAIL = False/);
+  assert.match(startup, /return self\._run_time/);
+  assert.match(runtime, /_MANIM_JUPYTER_PPTX_CAPTURE_TAIL = not _manim_jupyter_is_wait/);
+  assert.doesNotMatch(`${startup}\n${exportImplementation}`, /_ManimJupyterSplicePages|import av as|ffmpeg/i);
   // The whole timing tree is replaced with PowerPoint's native autoplay
   // structure (mainSeq + onBegin trigger + playFrom) — never a patch on the
   // bare python-pptx tree, which PowerPoint ignores.
@@ -547,8 +638,8 @@ test("presentation playback renders one continuous scene and opens Jupyter-style
   assert.match(runtime, /skip_reversing = False/);
   assert.match(runtime, /return super\(\)\.next_slide/);
   assert.match(extension, /ensureEnvironmentFeature\(notebook, "presentation"\)/);
-  assert.match(extension, /kernelRuntime!\.renderPresentation\(notebook\)/);
-  assert.match(extension, /kernelRuntime!\.openHtmlPresentation\(notebook, sceneName\)/);
+  assert.match(extension, /kernelRuntime!\.renderPresentation\(notebook, token, report\)/);
+  assert.match(extension, /kernelRuntime!\.openHtmlPresentation\(notebook, sceneName, token, report\)/);
   assert.doesNotMatch(`${runtime}\n${extension}`, /launchManimSlides|renderPresentationCell|--full-screen/);
 });
 
