@@ -13,6 +13,7 @@ import {
   buildMagicArguments,
   canonicalManimCellSource,
   combineManimCellSources,
+  countManimAnimations,
   isManimCellMetadata,
   isManimCellSource,
   previewAtLine,
@@ -1283,11 +1284,10 @@ del _manim_jupyter_configs`;
     if (!fragments.length) return undefined;
     // Locate the statement in the current Cell's own source so line numbers
     // match the editor, then render ONLY that statement's animation range
-    // (`-n i,i`), the same behaviour Manim itself has for "render this one
-    // animation".  Preceding Cells are included only as static object state
-    // (definitions + adds), and their plays/wait are suppressed so they never
-    // cost frames — a position adjustment or animation preview therefore
-    // renders the single animation under the cursor, not the whole scene.
+    // (`-n i,i`, 0-based, "only animation i").  All preceding Cells run
+    // normally so the runtime play count matches the static count computed
+    // here; -n skips their rendering cost internally, so only the cursor
+    // statement's animation is ever rasterized.
     const currentFragment = fragments[fragments.length - 1];
     const cellSource = canonicalManimCellSource(currentFragment.source);
     const preview = previewAtLine(cellSource, cursorLine);
@@ -1300,6 +1300,7 @@ del _manim_jupyter_configs`;
     // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
+    const prefixSource = combineManimCellSources(preceding, false);
     const previewSource = combineManimCellSources(
       [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
       false,
@@ -1309,11 +1310,12 @@ del _manim_jupyter_configs`;
     // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
     // stretched to the configured aspect ratio afterwards.
     const previewSettings = previewRenderSettings(settings);
-    // The preceding Cells' plays/wait are suppressed in construct(), so the
-    // runtime animation counter only ever counts the current Cell's plays.
-    // The -n range must therefore be the local index inside this Cell — NOT
-    // offset by the preceding Cells' (suppressed) animations.
-    const animationRange = preview.animationIndex;
+    // 0-based global index of the cursor animation across every preceding
+    // Cell plus the current Cell, matching the runtime play count because
+    // preceding Cells are executed normally (never suppressed).
+    const animationRange = preview.animationIndex === undefined
+      ? undefined
+      : countManimAnimations(prefixSource) + preview.animationIndex;
     const args = buildMagicArguments(
       previewName,
       previewSettings,
@@ -1335,11 +1337,6 @@ class ${previewName}(_ManimJupyterManimScene):
         # Line preview uses the plain Manim Scene base. Slide boundaries are
         # presentation metadata, not animations, so they are no-ops here.
         self.next_slide = lambda *args, **kwargs: None
-        # Suppress every animation of the preceding Cells: their Mobjects stay
-        # in the scene, but their plays/wait never render frames, so the
-        # -n i,i range targets exactly the cursor statement's animation.
-        self.play = lambda *args, **kwargs: None
-        self.wait = lambda *args, **kwargs: None
 ${body}${objectFinish}
 
 get_ipython().run_line_magic("manim", ${JSON.stringify(args)})

@@ -198,11 +198,10 @@ test("line preview skips slide boundaries and renders at the lowest standard", a
   assert.match(core, /disableCaching: false/);
   assert.match(core, /quality: "l"/);
   // Preview renders only the cursor statement's animation: preceding Cells
-  // keep their Mobjects but their plays/wait are suppressed (so the runtime
-  // counter only counts this Cell's plays), and the -n i,i range targets
-  // exactly the animation under the cursor with its local index.
-  assert.match(runtime, /const animationRange = preview\.animationIndex/);
-  assert.match(runtime, /self\.play = lambda \*args, \*\*kwargs: None/);
+  // run normally so the runtime play count matches the static count, and the
+  // -n i,i range (0-based) targets exactly the animation under the cursor.
+  assert.match(runtime, /countManimAnimations\(prefixSource\) \+ preview\.animationIndex/);
+  assert.match(runtime, /const animationRange = preview\.animationIndex === undefined/);
 });
 
 test("Python, Markdown, and Manim cells have strict independent execution paths", async () => {
