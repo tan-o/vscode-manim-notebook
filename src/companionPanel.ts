@@ -18,8 +18,6 @@ import {
 } from "./officialDocs";
 import {
   typstMathContextAtOffset,
-  typstMathPythonContextAtOffset,
-  typstMathPythonWordAtOffset,
   typstMathSuggestions,
   typstMathWordAtOffset,
 } from "./typstMath";
@@ -715,23 +713,19 @@ export class CompanionPanel implements vscode.Disposable {
   }
 
   private typstHelpHtml(cell: vscode.NotebookCell | undefined): string {
-    if (!cell) return "<p>未选择 Typst 数学公式。</p>";
+    if (!cell || cell.kind !== vscode.NotebookCellKind.Markup) {
+      // Typst help and completions are a Markdown-cell feature only; Manim
+      // cells always route to the Manim documentation.
+      return "<p>Typst 数学帮助只在 Markdown Cell 中生效。把光标放进 <code>$...$</code> 或 <code>$$...$$</code> 中查看符号说明与候选。</p>";
+    }
     const position = this.currentPosition(cell);
     const offset = position ? cell.document.offsetAt(position) : 0;
     const source = cell.document.getText();
-    const inManimCell = cell.kind === vscode.NotebookCellKind.Code &&
-      isManimCellMetadata(cell.metadata);
-    const context = inManimCell
-      ? typstMathPythonContextAtOffset(source, offset)
-      : typstMathContextAtOffset(source, offset);
+    const context = typstMathContextAtOffset(source, offset);
     if (!context) {
-      return inManimCell
-        ? "<p>把光标放进 <code>TypstMath(r\"...\")</code> 的字符串中查看符号说明与候选。</p>"
-        : "<p>把光标放进 Markdown 的 <code>$...$</code> 或 <code>$$...$$</code> 中。</p>";
+      return "<p>把光标放进 Markdown 的 <code>$...$</code> 或 <code>$$...$$</code> 中。</p>";
     }
-    const word = inManimCell
-      ? typstMathPythonWordAtOffset(source, offset)
-      : typstMathWordAtOffset(source, offset);
+    const word = typstMathWordAtOffset(source, offset);
     const suggestions = typstMathSuggestions(word?.prefix ?? "", 10);
     const expression = source.slice(context.contentStart, context.contentEnd).trim();
     const current = suggestions[0];
@@ -826,23 +820,9 @@ export class CompanionPanel implements vscode.Disposable {
       ? cell.document.getText(cell.document.getWordRangeAtPosition(editor.selection.active))
       : "";
     if (isManimCellMetadata(cell.metadata)) {
-      // Inside a TypstMath("...") string the panel shows offline Typst
-      // completions instead of a Manim API page.
-      const typst = typstMathPythonContextAtOffset(fullSource, offset);
-      if (typst) {
-        const word = typstMathPythonWordAtOffset(fullSource, offset);
-        const first = typstMathSuggestions(word?.prefix ?? "", 1)[0];
-        return {
-          code: fullSource.slice(typst.contentStart, typst.contentEnd).trim(),
-          mode: "typst",
-          panelTitle: "Typst 数学帮助",
-          help: {
-            title: first?.label ?? "Typst 数学模式",
-            detail: first?.detail ?? "显示当前 Typst 公式及离线符号候选。",
-          },
-        };
-      }
-      // Manim cells always resolve to the official Manim documentation.
+      // Manim cells always resolve to the official Manim documentation,
+      // including inside TypstMath("...") strings — Typst help is a Markdown
+      // cell feature only.
       const source = canonicalManimCellSource(cell.document.getText());
       const statement = previewAtLine(source, lineNumber)?.text ?? line;
       const helpWord = documentationSymbol(cursorWord, statement) ?? "";

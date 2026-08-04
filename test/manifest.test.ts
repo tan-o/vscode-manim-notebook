@@ -197,10 +197,11 @@ test("line preview skips slide boundaries and renders at the lowest standard", a
   assert.match(core, /previewRenderSettings/);
   assert.match(core, /disableCaching: false/);
   assert.match(core, /quality: "l"/);
-  // Preview renders the full cumulative Scene: a range-based -n is
-  // deliberately not used because static animation counting would disagree
-  // with the runtime count whenever self.play appears inside a loop.
-  assert.doesNotMatch(runtime, /countManimAnimations/);
+  // Preview renders only the cursor statement's animation: preceding Cells
+  // keep their Mobjects but their plays/wait are suppressed, and the -n i,i
+  // range targets exactly the animation under the cursor.
+  assert.match(runtime, /countManimAnimations\(prefixSource\) \+ preview\.animationIndex/);
+  assert.match(runtime, /self\.play = lambda \*args, \*\*kwargs: None/);
 });
 
 test("Python, Markdown, and Manim cells have strict independent execution paths", async () => {
@@ -392,6 +393,10 @@ test("contextual help routes Markdown math to Typst and Python to native hovers"
   assert.match(source, /"vscode\.executeHoverProvider"/);
   assert.match(source, /panelTitle:\s*"Python 原生帮助"/);
   assert.match(source, /当前内容是 Typst 数学表达式，不会查询 Manim 文档/);
+  // Typst help and completions are a Markdown-cell feature only — a Manim
+  // cell inside TypstMath("...") routes to the Manim documentation.
+  assert.match(source, /Typst 数学帮助只在 Markdown Cell 中生效/);
+  assert.doesNotMatch(source, /typstMathPythonContextAtOffset/);
 });
 
 test("Typst math in Manim Markdown has local editor completion", async () => {
@@ -434,7 +439,7 @@ test("Manim cells route the help panel to official Manim docs before Python hove
   const pythonReturn = source.indexOf('panelTitle: "Python 原生帮助"');
   assert.ok(manimBranch >= 0, "missing manim-cell branch");
   assert.ok(pythonReturn > manimBranch, "python hover must come after manim branch");
-  assert.match(source, /typstMathPythonContextAtOffset\(fullSource, offset\)/);
+  assert.doesNotMatch(source, /typstMathPythonContextAtOffset\(fullSource, offset\)/);
   assert.match(source, /mode: "manim"/);
   assert.match(source, /mode: "python"/);
   // Presentations and cumulative renders collect only Manim cells; Markdown

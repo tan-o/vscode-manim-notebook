@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import * as vscode from "vscode";
-import { isManimCellMetadata, isManimNotebookPath, mathSpanAtOffset } from "./core";
+import { isManimNotebookPath, mathSpanAtOffset } from "./core";
 import {
   normalizeTypstMathExpression,
-  typstMathPythonContextAtOffset,
-  typstMathPythonWordAtOffset,
   typstMathSuggestions,
   typstMathWordAtOffset,
 } from "./typstMath";
@@ -158,20 +156,6 @@ export class TypstMarkdownService implements vscode.Disposable {
         },
         ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.".split(""),
       ),
-      vscode.languages.registerCompletionItemProvider(
-        [
-          {
-            language: "python",
-            notebookType: MANIM_NOTEBOOK_TYPE,
-            scheme: "vscode-notebook-cell",
-          },
-        ],
-        {
-          provideCompletionItems: (document, position) =>
-            this.pythonCompletions(document, position),
-        },
-        ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._".split(""),
-      ),
       vscode.window.onDidChangeActiveColorTheme(() => {
         this.cache.clear();
       }),
@@ -322,54 +306,6 @@ ${display ? `$ ${normalizedExpression} $` : `$${normalizedExpression}$`}
     const source = document.getText();
     const offset = document.offsetAt(position);
     const word = typstMathWordAtOffset(source, offset);
-    if (!word) return undefined;
-    const range = new vscode.Range(
-      document.positionAt(word.start),
-      document.positionAt(word.end),
-    );
-    const items = typstMathSuggestions(word.prefix).map((suggestion, index) => {
-      const item = new vscode.CompletionItem(
-        {
-          label: suggestion.label,
-          description: `${suggestion.glyph} · ${suggestion.detail}`,
-        },
-        suggestion.snippet
-          ? vscode.CompletionItemKind.Snippet
-          : vscode.CompletionItemKind.Operator,
-      );
-      item.range = range;
-      item.insertText = suggestion.snippet
-        ? new vscode.SnippetString(suggestion.insertText)
-        : suggestion.insertText;
-      item.filterText = [suggestion.label, ...suggestion.aliases].join(" ");
-      item.sortText = index.toString().padStart(3, "0");
-      const documentation = new vscode.MarkdownString();
-      documentation.appendMarkdown(`**${suggestion.glyph} ${suggestion.detail}**\n\n`);
-      documentation.appendCodeblock(
-        suggestion.insertText.replace(/\$\{\d+:([^}]+)\}/g, "$1"),
-        "typst",
-      );
-      item.documentation = documentation;
-      return item;
-    });
-    return new vscode.CompletionList(items, false);
-  }
-
-  private pythonCompletions(
-    document: vscode.TextDocument,
-    position: vscode.Position,
-  ): vscode.CompletionList | undefined {
-    const notebook = this.notebookForDocument(document);
-    if (!notebook) return undefined;
-    const cell = notebook.getCells().find(
-      (candidate) => candidate.document.uri.toString() === document.uri.toString(),
-    );
-    if (!cell || !isManimCellMetadata(cell.metadata)) return undefined;
-    const source = document.getText();
-    const offset = document.offsetAt(position);
-    const context = typstMathPythonContextAtOffset(source, offset);
-    if (!context) return undefined;
-    const word = typstMathPythonWordAtOffset(source, offset);
     if (!word) return undefined;
     const range = new vscode.Range(
       document.positionAt(word.start),
