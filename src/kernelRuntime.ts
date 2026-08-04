@@ -13,7 +13,6 @@ import {
   buildMagicArguments,
   canonicalManimCellSource,
   combineManimCellSources,
-  countManimAnimations,
   isManimCellMetadata,
   isManimCellSource,
   previewAtLine,
@@ -1301,7 +1300,6 @@ del _manim_jupyter_configs`;
     // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
-    const prefixSource = combineManimCellSources(preceding, false);
     const previewSource = combineManimCellSources(
       [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
       false,
@@ -1311,9 +1309,11 @@ del _manim_jupyter_configs`;
     // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
     // stretched to the configured aspect ratio afterwards.
     const previewSettings = previewRenderSettings(settings);
-    const animationRange = preview.animationIndex === undefined
-      ? undefined
-      : countManimAnimations(prefixSource) + preview.animationIndex;
+    // The preceding Cells' plays/wait are suppressed in construct(), so the
+    // runtime animation counter only ever counts the current Cell's plays.
+    // The -n range must therefore be the local index inside this Cell — NOT
+    // offset by the preceding Cells' (suppressed) animations.
+    const animationRange = preview.animationIndex;
     const args = buildMagicArguments(
       previewName,
       previewSettings,

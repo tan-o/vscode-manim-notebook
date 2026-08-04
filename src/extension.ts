@@ -141,7 +141,10 @@ class ManimCellStatusBarProvider implements vscode.NotebookCellStatusBarItemProv
     cell: vscode.NotebookCell,
     _token: vscode.CancellationToken,
   ): vscode.ProviderResult<vscode.NotebookCellStatusBarItem[]> {
-    if (!isManimCell(cell)) return [];
+    // Only the active Manim cell shows the badge; every Manim cell in the
+    // notebook would otherwise render one badge each (e.g. two "Manim" marks
+    // with a two-cell notebook).
+    if (!isManimCell(cell) || !this.isActiveCell(cell)) return [];
     const item = new vscode.NotebookCellStatusBarItem(
       "$(symbol-structure) Manim",
       vscode.NotebookCellStatusBarAlignment.Right,
@@ -149,6 +152,14 @@ class ManimCellStatusBarProvider implements vscode.NotebookCellStatusBarItemProv
     item.tooltip = "Manim Scene Cell：运行、预览和 PPT 分页由 Manim Jupyter 插件处理";
     item.priority = 100;
     return [item];
+  }
+
+  private isActiveCell(cell: vscode.NotebookCell): boolean {
+    const editor = vscode.window.activeNotebookEditor;
+    if (!editor || editor.notebook.uri.toString() !== cell.notebook.uri.toString()) {
+      return false;
+    }
+    return editor.selection.start === cell.index;
   }
 }
 
