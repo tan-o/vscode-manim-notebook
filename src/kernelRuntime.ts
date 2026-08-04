@@ -1301,11 +1301,23 @@ del _manim_jupyter_configs`;
     // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
-    const previewSource = combineManimCellSources(
-      [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
-      false,
-    );
-    const body = indentSourceLines(previewSource, "        ");
+    // Preceding Cells keep their full source (Mobjects, helpers and their
+    // plays run normally — plays outside the cursor statement are zeroed by
+    // the runtime guard below, including plays hidden inside helper calls).
+    const precedingSource = combineManimCellSources(preceding, false);
+    // The current Cell's statements up to and including the cursor statement.
+    const currentSource = canonicalManimCellSource(preview.sourceThroughStatement);
+    // The generated Scene body is: preceding Cells, then the cell anchor, then
+    // this Cell.  The anchor is the absolute Python line of the first source
+    // line, so the guard converts an absolute line back to a body-relative
+    // line; the cursor statement's window is `precedingLineCount + cell line`.
+    // Line counts are stable because indentSourceLines preserves every line.
+    const precedingLineCount = precedingSource.split(/\r?\n/).length;
+    const body = [
+      ...indentSourceLines(precedingSource, "        ").split(/\r?\n/),
+      "        _manim_jupyter_cell_start = _manim_jupyter_inspect.currentframe().f_lineno + 1",
+      ...indentSourceLines(currentSource, "        ").split(/\r?\n/),
+    ].filter((line) => line !== "").join("\n");
     // Companion previews always render at the lowest standard (long edge
     // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
     // stretched to the configured aspect ratio afterwards.
@@ -1341,17 +1353,18 @@ class ${previewName}(_ManimJupyterManimScene):
         # that call self.play internally.
         _manim_jupyter_original_play = self.play
         _manim_jupyter_original_wait = self.wait
-        _manim_jupyter_preview_start = ${preview.line}
-        _manim_jupyter_preview_end = ${preview.endLine}
-        _manim_jupyter_intercept = _manim_jupyter_original_play
+        # Body-relative window of the cursor statement: preceding Cells occupy
+        # lines [0, precedingLineCount), this Cell starts at that offset.
+        _manim_jupyter_preview_start = ${precedingLineCount + preview.line}
+        _manim_jupyter_preview_end = ${precedingLineCount + preview.endLine}
         import inspect as _manim_jupyter_inspect
         def _manim_jupyter_guarded_play(*args, **kwargs):
-            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno
+            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno - _manim_jupyter_cell_start
             if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
                 return _manim_jupyter_original_play(Wait(0))
             return _manim_jupyter_original_play(*args, **kwargs)
         def _manim_jupyter_guarded_wait(*args, **kwargs):
-            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno
+            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno - _manim_jupyter_cell_start
             if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
                 return _manim_jupyter_original_wait(0)
             return _manim_jupyter_original_wait(*args, **kwargs)
