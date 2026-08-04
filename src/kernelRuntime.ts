@@ -13,7 +13,6 @@ import {
   buildMagicArguments,
   canonicalManimCellSource,
   combineManimCellSources,
-  countManimAnimations,
   isManimCellMetadata,
   isManimCellSource,
   previewAtLine,
@@ -454,6 +453,24 @@ function indentSourceLines(source: string, indent: string): string {
   return source.split(/\r?\n/)
     .map((line) => line.trim() ? `${indent}${line}` : "")
     .join("\n");
+}
+
+/**
+ * Replace every `self.play(...)` / `self.wait(...)` statement before `line`
+ * with `self.play(Wait(0))`, a zero-duration play that keeps the runtime
+ * animation counter consistent (no -n is involved) but produces zero frames.
+ * The scene therefore renders exactly one visible animation — the cursor
+ * statement — and never "plays through" the earlier ones, no matter how the
+ * code branches or loops.
+ */
+function demotePrecedingAnimationsToAdds(source: string, line: number): string {
+  const lines = source.split(/\r?\n/);
+  return lines.map((value, index) => {
+    if (index >= line) return value;
+    if (!/\bself\.(?:play|wait)\s*\(/.test(value)) return value;
+    const indent = /^\s*/.exec(value)?.[0] ?? "";
+    return `${indent}self.play(Wait(0))`;
+  }).join("\n");
 }
 
 export class KernelRuntime implements vscode.Disposable {
@@ -1283,11 +1300,12 @@ del _manim_jupyter_configs`;
     const fragments = this.manimFragmentsThrough(cell).filter((fragment) => fragment.source.trim());
     if (!fragments.length) return undefined;
     // Locate the statement in the current Cell's own source so line numbers
-    // match the editor, then render ONLY that statement's animation range
-    // (`-n i,i`, 0-based, "only animation i").  All preceding Cells run
-    // normally so the runtime play count matches the static count computed
-    // here; -n skips their rendering cost internally, so only the cursor
-    // statement's animation is ever rasterized.
+    // match the editor.  The preview then renders ONLY the cursor statement's
+    // animation: every `self.play(...)` / `self.wait(...)` BEFORE it is
+    // rewritten to `self.add(...)` (the Mobject state stays, but no frames
+    // are produced), so the scene contains exactly one play — the cursor
+    // statement — regardless of loops or conditions. No -n index arithmetic
+    // is involved, so it can never select the wrong animation.
     const currentFragment = fragments[fragments.length - 1];
     const cellSource = canonicalManimCellSource(currentFragment.source);
     const preview = previewAtLine(cellSource, cursorLine);
@@ -1300,9 +1318,17 @@ del _manim_jupyter_configs`;
     // cache entries while the cursor moves through the same Cell.
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
-    const prefixSource = combineManimCellSources(preceding, false);
     const previewSource = combineManimCellSources(
-      [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
+      [
+        ...preceding,
+        {
+          source: demotePrecedingAnimationsToAdds(
+            preview.sourceThroughStatement,
+            preview.line,
+          ),
+          settings: cellSettings,
+        },
+      ],
       false,
     );
     const body = indentSourceLines(previewSource, "        ");
@@ -1310,17 +1336,13 @@ del _manim_jupyter_configs`;
     // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
     // stretched to the configured aspect ratio afterwards.
     const previewSettings = previewRenderSettings(settings);
-    // 0-based global index of the cursor animation across every preceding
-    // Cell plus the current Cell, matching the runtime play count because
-    // preceding Cells are executed normally (never suppressed).
-    const animationRange = preview.animationIndex === undefined
-      ? undefined
-      : countManimAnimations(prefixSource) + preview.animationIndex;
+    // The scene contains exactly one play (the cursor statement), so no
+    // animation range is needed — Manim renders that single animation.
     const args = buildMagicArguments(
       previewName,
       previewSettings,
       "l",
-      animationRange,
+      undefined,
       preview.kind === "object",
     );
     const objectFinish = preview.kind === "object" && preview.objectName
