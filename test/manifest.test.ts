@@ -197,13 +197,15 @@ test("line preview skips slide boundaries and renders at the lowest standard", a
   assert.match(core, /previewRenderSettings/);
   assert.match(core, /disableCaching: false/);
   assert.match(core, /quality: "l"/);
-  // Preview renders only the cursor statement's animation: every play/wait
-  // before it becomes a zero-duration play (Wait(0)), so the scene renders
-  // exactly one visible animation and never "plays through" earlier ones.
-  // No -n index arithmetic is involved, so loops/conditions cannot misselect.
-  assert.match(runtime, /demotePrecedingAnimationsToAdds\(/);
-  assert.match(runtime, /self\.play\(Wait\(0\)\)/);
-  assert.doesNotMatch(runtime, /countManimAnimations/);
+  // Preview renders only the cursor statement's animation: self.play/self.wait
+  // are wrapped and every call whose runtime line is outside the cursor
+  // statement becomes a zero-frame Wait(0). Runtime line inspection catches
+  // plays inside helper functions (e.g. clear_stage's FadeOut) that textual
+  // rewrites cannot see — generic across loops, conditions and helpers.
+  assert.match(runtime, /_manim_jupyter_guarded_play/);
+  assert.match(runtime, /_manim_jupyter_inspect\.currentframe\(\)\.f_back\.f_lineno/);
+  assert.match(runtime, /_manim_jupyter_original_play\(Wait\(0\)\)/);
+  assert.doesNotMatch(runtime, /demotePrecedingAnimationsToAdds/);
 });
 
 test("Python, Markdown, and Manim cells have strict independent execution paths", async () => {

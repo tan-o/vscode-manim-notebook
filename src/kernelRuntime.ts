@@ -455,24 +455,6 @@ function indentSourceLines(source: string, indent: string): string {
     .join("\n");
 }
 
-/**
- * Replace every `self.play(...)` / `self.wait(...)` statement before `line`
- * with `self.play(Wait(0))`, a zero-duration play that keeps the runtime
- * animation counter consistent (no -n is involved) but produces zero frames.
- * The scene therefore renders exactly one visible animation — the cursor
- * statement — and never "plays through" the earlier ones, no matter how the
- * code branches or loops.
- */
-function demotePrecedingAnimationsToAdds(source: string, line: number): string {
-  const lines = source.split(/\r?\n/);
-  return lines.map((value, index) => {
-    if (index >= line) return value;
-    if (!/\bself\.(?:play|wait)\s*\(/.test(value)) return value;
-    const indent = /^\s*/.exec(value)?.[0] ?? "";
-    return `${indent}self.play(Wait(0))`;
-  }).join("\n");
-}
-
 export class KernelRuntime implements vscode.Disposable {
   private pythonPromise: Promise<PythonApi> | undefined;
   private readonly controllers = new Map<string, vscode.NotebookController>();
@@ -1300,12 +1282,13 @@ del _manim_jupyter_configs`;
     const fragments = this.manimFragmentsThrough(cell).filter((fragment) => fragment.source.trim());
     if (!fragments.length) return undefined;
     // Locate the statement in the current Cell's own source so line numbers
-    // match the editor.  The preview then renders ONLY the cursor statement's
-    // animation: every `self.play(...)` / `self.wait(...)` BEFORE it is
-    // rewritten to `self.add(...)` (the Mobject state stays, but no frames
-    // are produced), so the scene contains exactly one play — the cursor
-    // statement — regardless of loops or conditions. No -n index arithmetic
-    // is involved, so it can never select the wrong animation.
+    // match the editor.  The preview renders ONLY the cursor statement's
+    // animation: the Scene is built exactly as the whole cell (all Mobjects,
+    // function definitions and helper calls run), but every play/wait whose
+    // CALL SITE is not the cursor statement is intercepted at runtime and
+    // turned into a zero-frame `Wait(0)`.  Runtime line inspection catches
+    // plays hidden inside helper functions (e.g. clear_stage's FadeOut) that
+    // no textual rewrite can see — loops and conditions stay correct too.
     const currentFragment = fragments[fragments.length - 1];
     const cellSource = canonicalManimCellSource(currentFragment.source);
     const preview = previewAtLine(cellSource, cursorLine);
@@ -1319,16 +1302,7 @@ del _manim_jupyter_configs`;
     const previewName = "_ManimLinePreview";
     const preceding = fragments.slice(0, -1);
     const previewSource = combineManimCellSources(
-      [
-        ...preceding,
-        {
-          source: demotePrecedingAnimationsToAdds(
-            preview.sourceThroughStatement,
-            preview.line,
-          ),
-          settings: cellSettings,
-        },
-      ],
+      [...preceding, { source: preview.sourceThroughStatement, settings: cellSettings }],
       false,
     );
     const body = indentSourceLines(previewSource, "        ");
@@ -1336,8 +1310,8 @@ del _manim_jupyter_configs`;
     // ≤854, 15 fps, -ql) regardless of notebook settings; the display is
     // stretched to the configured aspect ratio afterwards.
     const previewSettings = previewRenderSettings(settings);
-    // The scene contains exactly one play (the cursor statement), so no
-    // animation range is needed — Manim renders that single animation.
+    // The scene renders exactly the cursor statement's animation; no -n
+    // index arithmetic is involved, so it can never select the wrong one.
     const args = buildMagicArguments(
       previewName,
       previewSettings,
@@ -1359,6 +1333,30 @@ class ${previewName}(_ManimJupyterManimScene):
         # Line preview uses the plain Manim Scene base. Slide boundaries are
         # presentation metadata, not animations, so they are no-ops here.
         self.next_slide = lambda *args, **kwargs: None
+        # Runtime interception: any play/wait whose call site (line number in
+        # this Cell, including inside helper functions) is not the cursor
+        # statement becomes a zero-frame Wait(0), so only the cursor
+        # statement's animation ever renders frames. This is the generic
+        # mechanism — it works for loops, conditions and helper functions
+        # that call self.play internally.
+        _manim_jupyter_original_play = self.play
+        _manim_jupyter_original_wait = self.wait
+        _manim_jupyter_preview_start = ${preview.line}
+        _manim_jupyter_preview_end = ${preview.endLine}
+        _manim_jupyter_intercept = _manim_jupyter_original_play
+        import inspect as _manim_jupyter_inspect
+        def _manim_jupyter_guarded_play(*args, **kwargs):
+            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno
+            if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
+                return _manim_jupyter_original_play(Wait(0))
+            return _manim_jupyter_original_play(*args, **kwargs)
+        def _manim_jupyter_guarded_wait(*args, **kwargs):
+            _manim_jupyter_line = _manim_jupyter_inspect.currentframe().f_back.f_lineno
+            if _manim_jupyter_line < _manim_jupyter_preview_start or _manim_jupyter_line > _manim_jupyter_preview_end:
+                return _manim_jupyter_original_wait(0)
+            return _manim_jupyter_original_wait(*args, **kwargs)
+        self.play = _manim_jupyter_guarded_play
+        self.wait = _manim_jupyter_guarded_wait
 ${body}${objectFinish}
 
 get_ipython().run_line_magic("manim", ${JSON.stringify(args)})
