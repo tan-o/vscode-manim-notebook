@@ -46,11 +46,6 @@ Markdown 与普通 Python Cell 永远不会成为演示页。全部 Manim Cell �
 - **导出 PowerPoint** 会把整个 Notebook 渲染成一个连续 Scene，然后直接读取 Manim 的 `partial_movie_files`：每个 `self.play(...)` / `self.wait(...)` 独立成为一页 PPT，每页的视频都设置了切换页面后自动播放，并生成视频首帧作为 poster frame。PPTX 导出不会把 Cell 或 `slides_next` 当作分页依据，`next_slide()` 只保留给 HTML 放映使用；只要 Notebook 里有 Manim Cell 就能导出，不再要求 Cell 勾选“一 Cell 一页 PPT”，也不会插入导出代码 Cell 或启动 Qt。
 - HTML 放映由 Manim Slides 生成正向/反向交互片段并交给 RevealJS 导航；普通 Cell 输出仍是独立预览。
 
-### PowerPoint 2003 兼容说明
-
-- `.pptx` 是 Office 2007 引入的格式，PowerPoint 2003 需要先安装 Microsoft Office Compatibility Pack 才能打开。
-- 当前插件按 manim-slides 的标准方式写入 `<p:timing>` 自动播放 XML（`p:cond delay="0"`）。新版 PowerPoint 会按页自动播放；Compatibility Pack / 2003 对这套 OOXML timing 的支持不完整，且 2003 原生播放视频主要支持 `.wmv` / `.avi`，对现代 H.264 MP4 的兼容性没有保证。
-- 如果必须交付给 PowerPoint 2003，建议在 PowerPoint 中把导出的 `.pptx` 另存为 `.ppt`，并把视频源转成 WMV/AVI 后重新插入；或者用 LibreOffice/PowerPoint 打开转换。
 
 ## 两种预览
 
